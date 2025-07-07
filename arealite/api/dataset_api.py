@@ -71,7 +71,9 @@ class DatasetFactory:
             from realhf.api.core.data_api import load_hf_processor_and_tokenizer
 
             processor, _ = load_hf_processor_and_tokenizer(tokenizer_path)
-            from arealite.impl.dataset.MM_MathInstruct import process_MathInstruct_dataset
+            from arealite.impl.dataset.MM_MathInstruct import (
+                process_MathInstruct_dataset,
+            )
 
             return process_MathInstruct_dataset(dataset, processor=processor)
         raise NotImplementedError(

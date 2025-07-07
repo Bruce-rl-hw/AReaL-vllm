@@ -1,7 +1,6 @@
 """Test script for GRPO Trainer implementation."""
 
 import pytest
-import torch
 from datasets import load_dataset
 
 from arealite.api.cli_args import (
@@ -18,15 +17,17 @@ from arealite.api.cli_args import (
 )
 from arealite.api.io_struct import FinetuneSpec
 from arealite.api.rollout_api import RolloutWorkflowFactory
+from arealite.impl.dataset.VL_dataset import VLDataset
 from arealite.impl.trainer.grpo import SpmdGRPOTrainer
 from arealite.system.rollout_controller import RolloutController
 from arealite.tests.utils import mock_rollout_output
-from realhf.base import constants, name_resolve, seeding
-from arealite.impl.dataset.VL_dataset import VLDataset
 from realhf.api.core.data_api import load_hf_processor_and_tokenizer
+from realhf.base import constants, name_resolve, seeding
+
 EXPR_NAME = "test_vlm_grpo"
 TRIAL_NAME = "test_vlm_grpo"
 MODEL_PATH = "/storage/openpsi/models/Qwen2-VL-7B"
+
 
 def create_vl_dataset(cfg: DatasetConfig, model_name_or_path: str) -> VLDataset:
     processor, tokenizer = load_hf_processor_and_tokenizer(
@@ -102,10 +103,7 @@ def test_train_step(args, kl_ctl, bs, n_samples, recompute, use_decoupled_loss):
     rollout_factory = RolloutWorkflowFactory(args)
     workflow = rollout_factory.make_workflow(args.rollout.workflow)
     rollout_controller = RolloutController(args, args.rollout, workflow=workflow)
-    dataset = create_vl_dataset(
-        args.train_dataset,
-        model_name_or_path=MODEL_PATH
-    )
+    dataset = create_vl_dataset(args.train_dataset, model_name_or_path=MODEL_PATH)
 
     trainer = SpmdGRPOTrainer(
         args=args,

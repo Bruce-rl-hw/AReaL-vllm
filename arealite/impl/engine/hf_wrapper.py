@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 import transformers
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
-from arealite.impl.engine.constant import VALID_VISION_MODELS 
+
 from arealite.api.cli_args import (
     EngineConfig,
     MicroBatchSpec,
@@ -18,6 +18,7 @@ from arealite.api.cli_args import (
 from arealite.api.engine_api import SPMDWrapper
 from arealite.api.io_struct import FinetuneSpec
 from arealite.api.llm_client_api import LLMClient
+from arealite.impl.engine.constant import VALID_VISION_MODELS
 from arealite.utils import (
     get_state_dict_from_repo_id_or_path,
     recorder_list,
@@ -93,17 +94,15 @@ class HFEngine(SPMDWrapper):
                 "Distributed training is not supported in this engine. "
                 "Please use FSDP for distributed training."
             )
-        
 
         dtype = torch.bfloat16 if self.engine_config.bf16 else torch.float16
         self.model_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path=self.engine_config.path,
             trust_remote_code=True,
         )
-       
 
         if self.model_config.model_type in VALID_VISION_MODELS:
-            model=AutoModelForImageTextToText.from_pretrained(
+            model = AutoModelForImageTextToText.from_pretrained(
                 pretrained_model_name_or_path=self.engine_config.path,
                 torch_dtype=dtype,
                 attn_implementation="flash_attention_2",
@@ -122,8 +121,6 @@ class HFEngine(SPMDWrapper):
                 )
 
             model = model.cuda()
-
-
 
         self.model = model
 
@@ -174,7 +171,7 @@ class HFEngine(SPMDWrapper):
         assert self.lr_scheduler is not None
 
         self.optimizer.zero_grad()
-        
+
         mb_splits = split_dict_tensor_with_cu_seqlens(input_, mb_spec)
 
         total_loss_weight = torch.tensor(

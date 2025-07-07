@@ -5,10 +5,13 @@ import torch
 import torch.distributed as dist
 import torch.utils.data
 from datasets import Dataset
-from typing import Any, Dict, List, Optional, Tuple, Union
+from PIL import Image
+from PIL.Image import Image as ImageObject
+
 from arealite.api.cli_args import TrainerConfig, TrainingArgs
 from arealite.api.engine_api import EngineFactory
 from arealite.api.trainer_api import Trainer
+from arealite.impl.engine.constant import VALID_VISION_MODELS
 from arealite.system.rollout_controller import RolloutController
 from arealite.utils import (
     close_wandb_tensorboard,
@@ -19,21 +22,16 @@ from arealite.utils import (
     log_wandb_tensorboard,
     record_timing,
 )
-from realhf.api.core.data_api import load_hf_tokenizer, tabulate_stats, load_hf_processor_and_tokenizer
+from realhf.api.core.data_api import load_hf_tokenizer, tabulate_stats
 from realhf.api.core.model_api import FinetuneSpec
 from realhf.base import logging, stats_tracker, timeutil
-from arealite.impl.engine.constant import VALID_VISION_MODELS 
-from PIL import Image
-from PIL.Image import Image as ImageObject
-from io import BytesIO
 
-import math
 logger = logging.getLogger("SFT Trainer")
 
 # def process_image(
 #     image: Union[Dict[str, Any], ImageObject, str], min_pixels: Optional[int]=None, max_pixels: Optional[int]=None
 # ) -> ImageObject:
-    
+
 #     if isinstance(image, str):
 #         image = Image.open(image)
 #     elif isinstance(image, dict):
@@ -55,6 +53,7 @@ logger = logging.getLogger("SFT Trainer")
 #     if image.mode != "RGB":
 #         image = image.convert("RGB")
 #     return image
+
 
 def compute_packed_sft_loss(
     logits: torch.Tensor,
@@ -159,6 +158,7 @@ class SFTTrainer(Trainer):
             max_length=self.mb_spec.max_tokens_per_mb,
             return_attention_mask=False,
         )
+
     # def _process(self,images):
     #     assert self.processor is not None, "Processor is not initialized for vision model"
     #     # image_list=[]
@@ -209,49 +209,56 @@ class SFTTrainer(Trainer):
             use_cache=False,
         )
 
-    def _get_packed_vl_input(self, data: Dict)-> Dict[str, torch.Tensor]:
+    def _get_packed_vl_input(self, data: Dict) -> Dict[str, torch.Tensor]:
         """
         Get packed vision-language input tensors.
         data.keys(): vl_prompt_input_ids, vl_prompt_length, pixel_values, image_grid_thw,
         answer_input_ids, answer_length
-        
+
         Output:
         A dictionary with keys:
         input_ids, attention_mask, position_ids, prompt_mask, pixel_values, image_grid_thw, cu_seqlens, max_seqlen, use_cache
         """
-        device=self.model.model.device
+        device = self.model.model.device
         # breakpoint()
-        vl_prompt_input_ids= data["vl_prompt_input_ids"]
+        vl_prompt_input_ids = data["vl_prompt_input_ids"]
         vl_prompt_length = data["vl_prompt_length"]
         answer_input_ids = data["answer_input_ids"]
         answer_length = data["answer_length"]
-        eos_token_tensor = torch.tensor([self.tokenizer.eos_token_id], dtype=torch.long, device=device)  # 设置eos_token_tensor的设备
+        eos_token_tensor = torch.tensor(
+            [self.tokenizer.eos_token_id], dtype=torch.long, device=device
+        )  # 设置eos_token_tensor的设备
         # merge vl_prompt_input_ids, answer_input_ids, adding eos token,the first column is batch size
         tokenized_inputs = {
             "input_ids": [
                 torch.cat(
                     [
-                        vl_prompt_input_ids[i].to(device),  
+                        vl_prompt_input_ids[i].to(device),
                         answer_input_ids[i].to(device),
                         eos_token_tensor,
                     ],
                     dim=0,
                 )
-            for i in range(len(vl_prompt_input_ids))
+                for i in range(len(vl_prompt_input_ids))
             ],
-            "length": [vl_prompt_length[i] + answer_length[i] + 1 for i in range(len(vl_prompt_length))],
+            "length": [
+                vl_prompt_length[i] + answer_length[i] + 1
+                for i in range(len(vl_prompt_length))
+            ],
         }
 
-        
         pixel_values = [pixel_value.to(device) for pixel_value in data["pixel_values"]]
-        image_grid_thw = [image_grid_thw_.to(device) for image_grid_thw_ in data["image_grid_thw"]]
+        image_grid_thw = [
+            image_grid_thw_.to(device) for image_grid_thw_ in data["image_grid_thw"]
+        ]
         # form a data batch
         prompt_lens = vl_prompt_length
         input_lens = tokenized_inputs["length"]
 
         input_lens = torch.tensor(input_lens, dtype=torch.int, device=device)
         input_ids = [
-            torch.tensor(seq, dtype=torch.long, device=device) for seq in tokenized_inputs["input_ids"]
+            torch.tensor(seq, dtype=torch.long, device=device)
+            for seq in tokenized_inputs["input_ids"]
         ]
 
         prompt_mask = []
@@ -280,7 +287,6 @@ class SFTTrainer(Trainer):
             max_seqlen=max_seqlen,
             use_cache=False,
         )
-
 
     def train(self, resume_from_checkpoint=None):
         self.create_train_dataloader()

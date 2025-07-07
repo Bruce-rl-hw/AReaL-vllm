@@ -1,29 +1,31 @@
+from typing import Dict, List, Union
+
 from datasets import Dataset
-from typing import Any, Dict, List, Optional, Tuple, Union
-import hashlib
 from PIL import Image
 from PIL.Image import Image as ImageObject
-from io import BytesIO
-import os
 
-VL_DATASET_KEY={
+VL_DATASET_KEY = {
     "clevr_count_70k": {
         "image_key": "images",
         "question_key": "problem",
-        "answer_key": "answer"
+        "answer_key": "answer",
     },
     "mm_mathinstruct": {
         "image_key": "image",
         "question_key": "question",
         "answer_key": "solution",
-        "image_dir": "image_path"
-    }
+        "image_dir": "image_path",
+    },
 }
+
 
 def register_VL_dataset(dataset_name: str) -> Dict[str, Union[str, List[str]]]:
     if dataset_name.lower() not in VL_DATASET_KEY:
-        raise ValueError(f"VL dataset {dataset_name} is not supported. Supported datasets are: {VL_DATASET_KEY}")
+        raise ValueError(
+            f"VL dataset {dataset_name} is not supported. Supported datasets are: {VL_DATASET_KEY}"
+        )
     return VL_DATASET_KEY[dataset_name.lower()]
+
 
 # def process_VL_dataset(
 #     dataset: Dataset,
@@ -39,10 +41,9 @@ def register_VL_dataset(dataset_name: str) -> Dict[str, Union[str, List[str]]]:
 #         raise ValueError(f"Unsupported VL dataset: {dataset.info.dataset_name}. Supported datasets are: {VL_DATASET}")
 
 
-
 # def generate_image_hash(image: Image.Image) -> str:
 #     img_byte_arr = BytesIO()
-#     image.save(img_byte_arr, format='PNG') 
+#     image.save(img_byte_arr, format='PNG')
 #     img_byte_arr = img_byte_arr.getvalue()
 #     return hashlib.sha256(img_byte_arr).hexdigest()
 
@@ -51,9 +52,9 @@ def register_VL_dataset(dataset_name: str) -> Dict[str, Union[str, List[str]]]:
 
 # def generate_hash(images: list, question: str) -> str:
 #     image_hashes = [generate_image_hash(image) for image in images]
-    
+
 #     question_hash = generate_question_hash(question)
-    
+
 #     combined_hash_input = question_hash + ''.join(image_hashes)
 #     return hashlib.sha256(combined_hash_input.encode('utf-8')).hexdigest()
 

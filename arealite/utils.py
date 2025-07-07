@@ -221,9 +221,9 @@ def split_dict_tensor_with_cu_seqlens(
     mb_spec: MicroBatchSpec,
     group: Optional[dist.ProcessGroup] = None,
 ) -> MicroBatchSplitResult:
-    '''
+    """
     Split a dictionary of tensors into micro-batches based on cumulative sequence lengths.
-    '''
+    """
     assert "cu_seqlens" in data
     cu_seqlens = data["cu_seqlens"]
     bs = cu_seqlens.shape[0] - 1
@@ -235,9 +235,14 @@ def split_dict_tensor_with_cu_seqlens(
     not_to_split = {}
     keys_to_unsqueeze = set()
     for key, value in data.items():
-        if key == "cu_seqlens" or key == "max_seqlen" or key=="image_grid_thw" or key=="pixel_values":
+        if (
+            key == "cu_seqlens"
+            or key == "max_seqlen"
+            or key == "image_grid_thw"
+            or key == "pixel_values"
+        ):
             continue
-        if not torch.is_tensor(value) :
+        if not torch.is_tensor(value):
             not_to_split[key] = value
         else:
             assert value.numel() == total_lens, (key, value.shape)
@@ -257,7 +262,7 @@ def split_dict_tensor_with_cu_seqlens(
     forward_indices = datapack.flat2d(group_indices)
     backward_indices = np.zeros(bs, dtype=np.int64)
     backward_indices[forward_indices] = np.arange(bs)
-    
+
     # breakpoint()
     to_split = dict_map(to_split, lambda x: unpack_sequence(x, cu_seqlens=cu_seqlens))
     to_split = dict_map(to_split, lambda x: recorder_list(x, forward_indices))
@@ -273,7 +278,7 @@ def split_dict_tensor_with_cu_seqlens(
 
         for group_index in group_indices:
             group_pixel_values = [pixel_values[i] for i in group_index]
-            group_image_grid_thw = [image_grid_thw[i].squeeze()for i in group_index]
+            group_image_grid_thw = [image_grid_thw[i].squeeze() for i in group_index]
 
             # Stack pixel_values for each group (assuming pixel_values is a list of tensors)
             pixel_values_split.append(torch.stack(group_pixel_values))

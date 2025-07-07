@@ -1,7 +1,8 @@
 """Test script for FSDP Engine implementation."""
 
-from typing import Dict
 import os
+from typing import Dict
+
 import torch
 from datasets import load_dataset
 
@@ -14,10 +15,11 @@ from arealite.api.cli_args import (
     TrainerConfig,
     TrainingArgs,
 )
-from realhf.api.cli_args import     ModelFamily
 from arealite.api.trainer_api import TrainerFactory
 from arealite.impl.dataset.VL_dataset import VLDataset
 from realhf.api.core.data_api import load_hf_processor_and_tokenizer
+
+
 def mock_loss_fn(logits: torch.Tensor, input_data: Dict) -> torch.Tensor:
     """Mock loss function for testing."""
     return torch.mean(logits)
@@ -122,5 +124,6 @@ def test_engine():
         trainer.train()
 
     print("All tests passed!")
+
 
 test_engine()

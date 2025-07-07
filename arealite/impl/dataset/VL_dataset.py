@@ -1,9 +1,10 @@
-#https://github.com/hiyouga/EasyR1/blob/main/verl/utils/dataset.py#
+# https://github.com/hiyouga/EasyR1/blob/main/verl/utils/dataset.py#
+import math
 import os
 from collections import defaultdict
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple, Union,Literal
-import math
+from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
 import torch
 from datasets import load_dataset
@@ -12,13 +13,9 @@ from PIL import Image
 from PIL.Image import Image as ImageObject
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
+
 from .VLdataset_dic import register_VL_dataset
 
-
-import torch
-import numpy as np
-from collections import defaultdict
-from torch.nn.utils.rnn import pad_sequence
 
 def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     tensors = defaultdict(list)
@@ -27,12 +24,12 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     for feature in features:
         for key, value in feature.items():
             if isinstance(value, torch.Tensor):
-                tensors[key].append(value) 
+                tensors[key].append(value)
             else:
-                non_tensors[key].append(value) 
+                non_tensors[key].append(value)
 
     for key, value in tensors.items():
-        tensors[key] = value  
+        tensors[key] = value
 
     for key, value in non_tensors.items():
         non_tensors[key] = np.array(value, dtype=object)
@@ -40,13 +37,14 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {**tensors, **non_tensors}
 
 
-
 def process_image(
-    image: Union[Dict[str, Any], ImageObject, str], min_pixels: Optional[int], max_pixels: Optional[int]
+    image: Union[Dict[str, Any], ImageObject, str],
+    min_pixels: Optional[int],
+    max_pixels: Optional[int],
 ) -> ImageObject:
-    '''
+    """
     Process an image to ensure it is in RGB format and resized if necessary.
-    '''
+    """
     if isinstance(image, str):
         image = Image.open(image)
     elif isinstance(image, dict):
@@ -57,18 +55,23 @@ def process_image(
     image.load()  # avoid "Too many open files" errors
     if max_pixels is not None and (image.width * image.height) > max_pixels:
         resize_factor = math.sqrt(max_pixels / (image.width * image.height))
-        width, height = int(image.width * resize_factor), int(image.height * resize_factor)
+        width, height = int(image.width * resize_factor), int(
+            image.height * resize_factor
+        )
         image = image.resize((width, height))
 
     if min_pixels is not None and (image.width * image.height) < min_pixels:
         resize_factor = math.sqrt(min_pixels / (image.width * image.height))
-        width, height = int(image.width * resize_factor), int(image.height * resize_factor)
+        width, height = int(image.width * resize_factor), int(
+            image.height * resize_factor
+        )
         image = image.resize((width, height))
 
     if image.mode != "RGB":
         image = image.convert("RGB")
 
     return image
+
 
 # def pad_sequence_to_length(
 #     tensor: torch.Tensor, max_seq_len: int, pad_token_id: int, left_pad: bool = False
@@ -118,6 +121,7 @@ def process_image(
 
 #     return input_ids, attention_mask, position_ids
 
+
 def get_rope_index(
     processor: "Qwen2VLProcessor",
     input_ids: torch.Tensor,
@@ -135,12 +139,18 @@ def get_rope_index(
     tokens_per_second = 2
     image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
     video_token_id = processor.tokenizer.convert_tokens_to_ids("<|video_pad|>")
-    vision_start_token_id = processor.tokenizer.convert_tokens_to_ids("<|vision_start|>")
-    if input_ids is not None and (image_grid_thw is not None or video_grid_thw is not None):
+    vision_start_token_id = processor.tokenizer.convert_tokens_to_ids(
+        "<|vision_start|>"
+    )
+    if input_ids is not None and (
+        image_grid_thw is not None or video_grid_thw is not None
+    ):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        position_ids = torch.ones(3, input_ids.size(0), dtype=input_ids.dtype, device=input_ids.device)  # (3, seqlen)
+        position_ids = torch.ones(
+            3, input_ids.size(0), dtype=input_ids.dtype, device=input_ids.device
+        )  # (3, seqlen)
         image_index, video_index = 0, 0
         input_ids = input_ids[attention_mask == 1]
         image_nums, video_nums = 0, 0
@@ -194,19 +204,37 @@ def get_rope_index(
             text_len = ed - st
 
             st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
-            llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+            llm_pos_ids_list.append(
+                torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+            )
 
-            t_index = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w)
+            t_index = (
+                torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w)
+            )
             t_index = (t_index * second_per_grid_t * tokens_per_second).long().flatten()
-            h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
-            w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
-            llm_pos_ids_list.append(torch.stack([t_index, h_index, w_index]) + text_len + st_idx)
+            h_index = (
+                torch.arange(llm_grid_h)
+                .view(1, -1, 1)
+                .expand(llm_grid_t, -1, llm_grid_w)
+                .flatten()
+            )
+            w_index = (
+                torch.arange(llm_grid_w)
+                .view(1, 1, -1)
+                .expand(llm_grid_t, llm_grid_h, -1)
+                .flatten()
+            )
+            llm_pos_ids_list.append(
+                torch.stack([t_index, h_index, w_index]) + text_len + st_idx
+            )
             st = ed + llm_grid_t * llm_grid_h * llm_grid_w
 
         if st < len(input_tokens):
             st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
             text_len = len(input_tokens) - st
-            llm_pos_ids_list.append(torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
+            llm_pos_ids_list.append(
+                torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+            )
 
         llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
         position_ids[..., attention_mask == 1] = llm_positions.to(position_ids.device)
@@ -216,10 +244,13 @@ def get_rope_index(
             position_ids.masked_fill_(attention_mask == 0, 1)
             position_ids = position_ids.unsqueeze(0).expand(3, -1).to(input_ids.device)
         else:
-            position_ids = torch.arange(input_ids.shape[1], device=input_ids.device).view(1, -1).expand(3, -1)
+            position_ids = (
+                torch.arange(input_ids.shape[1], device=input_ids.device)
+                .view(1, -1)
+                .expand(3, -1)
+            )
 
     return position_ids
-
 
 
 # def process_video(
@@ -254,12 +285,12 @@ class VLDataset(Dataset):
         filter_overlong_prompts_workers: int = 16,
         data_split: str = "train",
     ):
-        '''
+        """
         Universal Vision Language Dataset
         loading a dataset from huggingface hub or local directory
         register the dataset in VL_DATASET_KEY
         operator:format_prompt, filter_overlong_prompts
-        '''
+        """
         self.tokenizer = tokenizer
         self.processor = processor
         # self.prompt_key = prompt_key
@@ -272,8 +303,6 @@ class VLDataset(Dataset):
         self.truncation = truncation
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
-
-
 
         # if "@" in data_path:
         #     data_path, data_split = data_path.split("@")
@@ -312,17 +341,19 @@ class VLDataset(Dataset):
             )
 
     def _build_vl_question(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
-        '''
+        """
         Build the VL question from the example.
         input: example dict with keys: prompt, answer, images
         output standard format according to the processor
-        '''
-        prompt_str= example[self.prompt_key]
+        """
+        prompt_str = example[self.prompt_key]
         if self.format_prompt:
             format_prompt = Template(self.format_prompt.strip())
             prompt_str = format_prompt.render(content=prompt_str)
         if self.image_key in example:
-            image_token=self.processor.image_token if self.processor is not None else "<image>"
+            image_token = (
+                self.processor.image_token if self.processor is not None else "<image>"
+            )
             prompt_str = prompt_str.replace("<image>", image_token)
 
         # if self.image_key in example:
@@ -355,14 +386,25 @@ class VLDataset(Dataset):
             # prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
             prompt = messages
             images = example[self.image_key]
-            if self.image_dir is not None and len(images) != 0 and isinstance(images[0], str):  # image paths
+            if (
+                self.image_dir is not None
+                and len(images) != 0
+                and isinstance(images[0], str)
+            ):  # image paths
                 images = [os.path.join(self.image_dir, image) for image in images]
 
             processed_images = [] if len(images) != 0 else None  # text-only data
             for image in images:
-                processed_images.append(process_image(image, self.min_pixels, self.max_pixels))
+                processed_images.append(
+                    process_image(image, self.min_pixels, self.max_pixels)
+                )
 
-            model_inputs = self.processor(processed_images, [prompt], add_special_tokens=False, return_tensors="pt")
+            model_inputs = self.processor(
+                processed_images,
+                [prompt],
+                add_special_tokens=False,
+                return_tensors="pt",
+            )
             return model_inputs["input_ids"].size(-1) <= self.max_prompt_length
         # elif self.video_key in example:
         #     prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -379,14 +421,16 @@ class VLDataset(Dataset):
         #     )
         #     return model_inputs["input_ids"].size(-1) <= self.max_prompt_length
         else:
-            input_ids = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+            input_ids = self.tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True
+            )
             return len(input_ids) <= self.max_prompt_length
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        '''
+        """
         Get item from the dataset.
         input:example key: prompt, answer, images
         output: example dict with keys:
@@ -396,22 +440,38 @@ class VLDataset(Dataset):
             answer_length: length of the answer
             pixel_values: processed images if available
             multi_modal_data: dict with images or videos if available
-        '''
+        """
         example: dict = self.dataset[index]
         messages = self._build_vl_question(example)
         if self.image_key in example:
-            prompt=messages
+            prompt = messages
             # prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
             images = example.pop(self.image_key)
-            if self.image_dir is not None and len(images) != 0 and isinstance(images[0], str):  # image paths
+            if (
+                self.image_dir is not None
+                and len(images) != 0
+                and isinstance(images[0], str)
+            ):  # image paths
                 images = [os.path.join(self.image_dir, image) for image in images]
 
             processed_images = [] if len(images) != 0 else None  # text-only data
             for image in images:
-                processed_images.append(process_image(image, self.min_pixels, self.max_pixels))
+                processed_images.append(
+                    process_image(image, self.min_pixels, self.max_pixels)
+                )
 
-            model_inputs = self.processor(images=processed_images, text=[prompt], add_special_tokens=False, return_tensors="pt",return_length=True,padding=False,truncation=True,return_attention_mask=False,max_length=self.max_prompt_length)
-            vl_prompt_input_ids= model_inputs.pop("input_ids")[0]
+            model_inputs = self.processor(
+                images=processed_images,
+                text=[prompt],
+                add_special_tokens=False,
+                return_tensors="pt",
+                return_length=True,
+                padding=False,
+                truncation=True,
+                return_attention_mask=False,
+                max_length=self.max_prompt_length,
+            )
+            vl_prompt_input_ids = model_inputs.pop("input_ids")[0]
             vl_prompt_length = model_inputs.pop("length")[0]
             # attention_mask = model_inputs.pop("attention_mask")[0]
             example["multi_modal_data"] = {"images": images}
@@ -425,29 +485,37 @@ class VLDataset(Dataset):
 
         #     processed_videos = [] if len(videos) != 0 else None  # text-only data
         #     video_fps_list = []
-            # for video in videos:
-            #     processed_video, video_fps = process_video(
-            #         video, self.min_pixels, self.max_pixels, self.video_fps, return_fps=True
-            #     )
-            #     processed_videos.append(processed_video)
-            #     video_fps_list.append(video_fps)
+        # for video in videos:
+        #     processed_video, video_fps = process_video(
+        #         video, self.min_pixels, self.max_pixels, self.video_fps, return_fps=True
+        #     )
+        #     processed_videos.append(processed_video)
+        #     video_fps_list.append(video_fps)
 
-            # model_inputs = self.processor(
-            #     videos=processed_videos, text=[prompt], add_special_tokens=False, return_tensors="pt"
-            # )
-            # if "second_per_grid_ts" in self.processor.model_input_names:
-            #     model_inputs["second_per_grid_ts"] = [2.0 / video_sample_fps for video_sample_fps in video_fps_list]
+        # model_inputs = self.processor(
+        #     videos=processed_videos, text=[prompt], add_special_tokens=False, return_tensors="pt"
+        # )
+        # if "second_per_grid_ts" in self.processor.model_input_names:
+        #     model_inputs["second_per_grid_ts"] = [2.0 / video_sample_fps for video_sample_fps in video_fps_list]
 
-            # input_ids = model_inputs.pop("input_ids")[0]
-            # attention_mask = model_inputs.pop("attention_mask")[0]
-            # example["multi_modal_data"] = {"videos": videos}
+        # input_ids = model_inputs.pop("input_ids")[0]
+        # attention_mask = model_inputs.pop("attention_mask")[0]
+        # example["multi_modal_data"] = {"videos": videos}
         else:
             # prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-            prompt=messages
-            model_inputs = self.tokenizer(prompt, add_special_tokens=False, return_tensors="pt", return_length=True, padding=False, truncation=True, max_length=self.max_prompt_length)
+            prompt = messages
+            model_inputs = self.tokenizer(
+                prompt,
+                add_special_tokens=False,
+                return_tensors="pt",
+                return_length=True,
+                padding=False,
+                truncation=True,
+                max_length=self.max_prompt_length,
+            )
             vl_prompt_input_ids = model_inputs.pop("input_ids")[0]
             vl_prompt_length = model_inputs.pop("length")[0]
-            attention_mask = model_inputs.pop("attention_mask")[0]
+            model_inputs.pop("attention_mask")[0]
 
         # if self.processor is not None and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__:
         #     # qwen2vl mrope
@@ -461,7 +529,7 @@ class VLDataset(Dataset):
         #     )  # (3, seq_length)
         # else:
         #     position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
-        # position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None) 
+        # position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)
 
         # vl_prompt_input_ids, attention_mask, position_ids = postprocess_data(
         #     input_ids=vl_prompt_input_ids,
@@ -500,5 +568,5 @@ class VLDataset(Dataset):
         example["answer_input_ids"] = answer_input_ids
         example["answer_length"] = answer_length
         example["answer"] = example.pop(self.answer_key)
-        
+
         return example

@@ -9,10 +9,12 @@ from typing import Dict, List, Optional, Tuple
 import uvloop
 
 uvloop.install()
+import os
+
 from hydra import compose as hydra_compose
 from hydra import initialize as hydra_init
 from omegaconf import MISSING, OmegaConf
-import os
+
 from realhf.api.cli_args import (
     ClusterSpecConfig,
     ExperimentSaveEvalControl,
@@ -341,25 +343,24 @@ class DatasetConfig:
         default=512, metadata={"help": "Maximum length of the prompt text"}
     )
     format_prompt: str = field(
-        default=None,
-        metadata={"help": "Format for the prompt text"}
+        default=None, metadata={"help": "Format for the prompt text"}
     )
     min_pixels: int = field(
-        default=262144,# from verl
-        metadata={"help": "Minimum number of pixels for image filtering"}
+        default=262144,  # from verl
+        metadata={"help": "Minimum number of pixels for image filtering"},
     )
     max_pixels: int = field(
         default=4194304,  # from verl
-        metadata={"help": "Maximum number of pixels for image filtering"}
+        metadata={"help": "Maximum number of pixels for image filtering"},
     )
     filter_overlong_prompts: bool = field(
-        default=True,
-        metadata={"help": "Whether to filter overlong prompts"}
+        default=True, metadata={"help": "Whether to filter overlong prompts"}
     )
     filter_overlong_prompts_workers: int = field(
         default=32,
-        metadata={"help": "Number of workers for filtering overlong prompts"}
+        metadata={"help": "Number of workers for filtering overlong prompts"},
     )
+
     def post_init(self):
         if self.image_dir is not None:
             if os.path.exists(self.image_dir):  # ray job uses absolute path
@@ -374,7 +375,9 @@ class DatasetConfig:
             else:
                 print(f"Format prompt file {self.format_prompt} not found.")
                 self.format_prompt = None
+
     # ---------------------------------End of VLM dataset----------------------------
+
 
 ## Training backend configs. ##
 
