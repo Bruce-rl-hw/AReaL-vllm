@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
 
-from arealite.api.cli_args import SGLangConfig, parse_cli_args, to_structured_cfg
+from arealite.api.cli_args import SGLangConfig, vLLMConfig, parse_cli_args, to_structured_cfg
 from arealite.api.io_struct import AllocationMode, AllocationType
 from arealite.utils.network import find_free_ports, gethostip
 from realhf.base import gpu_utils, logging, name_resolve, names
@@ -265,6 +265,24 @@ def main_local():
             )
             server_cmd.append(cmd)
             server_addrs.append(f"{host}:{ports[i * 2]}")
+    elif alloc_mode.type_ == AllocationType.DECOUPLED_vLLM:
+        base_seed = cfg.vllm.random_seed
+        cfg.vllm = to_structured_cfg(cfg.vllm, vLLMConfig)
+        ports = find_free_ports(alloc_mode.gen_dp_size * 2, port_range=(10000, 50000))
+        host_ip = gethostip()
+        host = host_ip
+        for i in range(alloc_mode.gen_dp_size):  # 实际为实例数
+            cfg.vllm.random_seed = base_seed + i
+            cmd = vLLMConfig.build_cmd(
+                cfg.vllm,
+                host=host,
+                tp_size=alloc_mode.gen_tp_size,
+                base_gpu_id=0,
+                port=ports[i * 2]
+            )
+            server_cmd.append(cmd)
+            server_addrs.append(f"{host}:{ports[i * 2]}")
+
     else:
         raise NotImplementedError()
 
@@ -278,6 +296,10 @@ def main_local():
     logger.info(
         f"LLM inference server launched at: AREAL_LLM_SERVER_ADDRS={','.join(server_addrs)}"
     )
+
+    print('==============================wait for vLLM start===============================')
+    import time
+    time.sleep(100000)
 
     # Launch trainer entrypoint
     if not cfg.server_only:

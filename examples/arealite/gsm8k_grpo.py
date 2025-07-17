@@ -31,7 +31,7 @@ def process_gsm8k_rl_dataset(dataset: Dataset):
 
 
 def get_gsm8k_dataset(split, rank, world_size):
-    dataset = load_dataset(path="openai/gsm8k", name="main", split=split)
+    dataset = load_dataset(path="/data1/s00580798/datasets/gsm8k", name="main", split=split)
     dataset = split_dataset_by_node(dataset, rank=rank, world_size=world_size)
     return process_gsm8k_rl_dataset(dataset)
 
