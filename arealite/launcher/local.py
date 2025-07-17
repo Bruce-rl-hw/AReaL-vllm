@@ -266,13 +266,13 @@ def main_local():
             server_cmd.append(cmd)
             server_addrs.append(f"{host}:{ports[i * 2]}")
     elif alloc_mode.type_ == AllocationType.DECOUPLED_vLLM:
-        base_seed = cfg.vllm.random_seed
+        base_seed = cfg.vllm.seed
         cfg.vllm = to_structured_cfg(cfg.vllm, vLLMConfig)
         ports = find_free_ports(alloc_mode.gen_dp_size * 2, port_range=(10000, 50000))
         host_ip = gethostip()
         host = host_ip
         for i in range(alloc_mode.gen_dp_size):  # 实际为实例数
-            cfg.vllm.random_seed = base_seed + i
+            cfg.vllm.seed = base_seed + i
             cmd = vLLMConfig.build_cmd(
                 cfg.vllm,
                 host=host,

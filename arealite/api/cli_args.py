@@ -376,7 +376,7 @@ class vLLMConfig:
 
     # original
     max_num_seqs: int = 256
-    kv_cache_type: str = "auto"
+    # kv_cache_type: str = "auto"
     num_scheduler_steps: int = 1
     multi_step_stream_outputs: bool = True
     block_size: int = 16
@@ -399,7 +399,7 @@ class vLLMConfig:
     enable_prefix_caching: bool = False
 
     gpu_memory_utilization: float = 0.9
-    additional_engine_args: Dict = field(default_factory=dict)
+    # additional_engine_args: Dict = field(default_factory=dict)
 
     @staticmethod
     def build_args(
@@ -416,7 +416,7 @@ class vLLMConfig:
             host=host,
             port=port,
             # Model and tokenizer
-            tokenizer=vllm_config.model_path,
+            tokenizer=vllm_config.model,
             load_format="auto",
             trust_remote_code=True,
             device="cuda",

@@ -87,8 +87,8 @@ server_only: false
 #  mem_fraction_static: 0.9
 
 vllm:
-  model_path: ${actor.path}
-  random_seed: ${seed}
+  model: ${actor.path}
+  seed: ${seed}
   skip_tokenizer_init: true
   dtype: ${actor.dtype}
   max_model_len: 32768
