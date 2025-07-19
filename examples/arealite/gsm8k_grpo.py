@@ -12,6 +12,7 @@ from arealite.api.cli_args import GRPOConfig, load_expr_config
 from arealite.api.io_struct import FinetuneSpec, WeightUpdateMeta
 from arealite.engine.ppo.actor import FSDPPPOActor
 from arealite.engine.sglang_remote import RemoteSGLangEngine
+from arealite.engine.vllm_remote import RemoteVLLMEngine
 from arealite.utils.device import log_gpu_stats
 from arealite.utils.evaluator import Evaluator
 from arealite.utils.saver import Saver
@@ -108,7 +109,7 @@ def main_grpo():
     )
 
     # Initialize inference engine
-    rollout = RemoteSGLangEngine(config.rollout)
+    rollout = RemoteVLLMEngine(config.rollout)
     rollout.initialize(None, ft_spec)
     eval_rollout = RemoteSGLangEngine(config.rollout)
     eval_rollout.initialize(None, ft_spec)

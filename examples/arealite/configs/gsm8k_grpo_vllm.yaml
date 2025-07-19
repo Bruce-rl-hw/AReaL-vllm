@@ -86,13 +86,13 @@ server_only: false
 #  context_length: 32768
 #  mem_fraction_static: 0.9
 
-vllm:
-  model: ${actor.path}
-  seed: ${seed}
-  skip_tokenizer_init: true
-  dtype: ${actor.dtype}
-  max_model_len: 32768
-  gpu_memory_utilization: 0.9
+#vllm:
+#  model: ${actor.path}
+#  seed: ${seed}
+#  skip_tokenizer_init: true
+#  dtype: ${actor.dtype}
+#  max_model_len: 32768
+#  gpu_memory_utilization: 0.9
 
 
 # datasets

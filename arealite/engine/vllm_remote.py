@@ -227,6 +227,7 @@ class RemoteVLLMEngine(InferenceEngine):
 
     async def agenerate(self, req: LLMRequest) -> LLMResponse:
         """Async version of generate using aiohttp."""
+        logger.info("start vllm agenerate")
         # Prepare request payload
         gconfig = req.gconfig
         if gconfig.n_samples != 1:
@@ -261,7 +262,8 @@ class RemoteVLLMEngine(InferenceEngine):
             self.rid_to_address[req.rid] = server_addr
             self.rid_queue.append(req.rid)
 
-            # completions api do not need loop
+        # completions api do not need loop
+        logger.info(f"vllm agenerate api:{server_addr}/v1/completions")
         result = await arequest_with_retry(
             session=self.session,
             addr=server_addr,
