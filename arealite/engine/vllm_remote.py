@@ -276,17 +276,18 @@ class RemoteVLLMEngine(InferenceEngine):
 
         # 解析 vLLM 结果
         choice = result["choices"][0]
-        output_tokens = [int(t) for t in choice["logprobs"]["tokens"]]
-        output_logprobs = [float(choice["logprobs"]["token_logprobs"][i]) for i in range(len(output_tokens))]
+        output_tokens_str = choice["logprobs"]["tokens"]
+        output_logprobs = [float(p) for p in choice["logprobs"]["token_logprobs"]]
         stop_reason = choice["finish_reason"] or "length"
 
-        latency = time.perf_counter() - start_time
+        # 若后续必须 token id，可在此处补充 encode
+        # output_tokens = tokenizer.convert_tokens_to_ids(output_tokens_str)
 
         return LLMResponse(
             input_tokens=req.input_ids,
-            output_tokens=output_tokens,
+            output_tokens=output_tokens_str,  # 字符串列表
             output_logprobs=output_logprobs,
-            output_versions=[-1] * len(output_tokens),  # 无版本信息时填占位
+            output_versions=[-1] * len(output_tokens_str),
             stop_reason=stop_reason,
             latency=latency,
             ttft=latency,
