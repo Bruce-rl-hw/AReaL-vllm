@@ -283,6 +283,8 @@ class RemoteVLLMEngine(InferenceEngine):
         # 若后续必须 token id，可在此处补充 encode
         # output_tokens = tokenizer.convert_tokens_to_ids(output_tokens_str)
 
+        latency = time.perf_counter() - start_time
+
         return LLMResponse(
             input_tokens=req.input_ids,
             output_tokens=output_tokens_str,  # 字符串列表
