@@ -111,10 +111,10 @@ def main_grpo():
     # Initialize inference engine
     rollout = RemoteVLLMEngine(config.rollout)
     rollout.initialize(None, ft_spec)
-    eval_rollout = RemoteSGLangEngine(config.rollout)
-    eval_rollout.initialize(None, ft_spec)
+    # eval_rollout = RemoteSGLangEngine(config.rollout)
+    # eval_rollout.initialize(None, ft_spec)
     # NOTE: set a large version such that eval does not have any offpolicyness control
-    eval_rollout.set_version(int(1e12))
+    # eval_rollout.set_version(int(1e12))
 
     # Initialize train engine
     actor = FSDPPPOActor(config=config.actor)
@@ -214,39 +214,39 @@ def main_grpo():
         with stats_tracker.record_timing("save"):
             saver.save(actor, epoch, step, global_step)
 
-        with stats_tracker.record_timing("eval"):
-
-            def evaluate_fn():
-                rollout.pause()
-                cnt = 0
-                for data in valid_dataloader:
-                    for item in data:
-                        eval_rollout.submit(item, workflow)
-                        cnt += 1
-                batch = eval_rollout.wait(cnt, timeout=None)
-                rewards = batch["rewards"].float().to(actor.device)
-                with stats_tracker.scope("grpo-eval"):
-                    stats_tracker.denominator(
-                        n_seqs=torch.ones(
-                            rewards.shape[0],
-                            device=rewards.device,
-                            dtype=torch.bool,
-                        )
-                    )
-                    stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
-                rollout.resume()
-
-            evaluator.evaluate(
-                evaluate_fn,
-                epoch,
-                step,
-                global_step,
-            )
-
-        logger.commit(epoch, step, global_step, stats)
+        # with stats_tracker.record_timing("eval"):
+        #
+        #     def evaluate_fn():
+        #         rollout.pause()
+        #         cnt = 0
+        #         for data in valid_dataloader:
+        #             for item in data:
+        #                 eval_rollout.submit(item, workflow)
+        #                 cnt += 1
+        #         batch = eval_rollout.wait(cnt, timeout=None)
+        #         rewards = batch["rewards"].float().to(actor.device)
+        #         with stats_tracker.scope("grpo-eval"):
+        #             stats_tracker.denominator(
+        #                 n_seqs=torch.ones(
+        #                     rewards.shape[0],
+        #                     device=rewards.device,
+        #                     dtype=torch.bool,
+        #                 )
+        #             )
+        #             stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
+        #         rollout.resume()
+        #
+        #     evaluator.evaluate(
+        #         evaluate_fn,
+        #         epoch,
+        #         step,
+        #         global_step,
+        #     )
+        #
+        # logger.commit(epoch, step, global_step, stats)
 
     logger.close()
-    eval_rollout.destroy()
+    # eval_rollout.destroy()
     rollout.destroy()
     if ref is not None:
         ref.destroy()
