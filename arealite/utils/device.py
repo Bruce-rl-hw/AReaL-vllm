@@ -7,6 +7,17 @@ from realhf.base import logging
 
 logger = logging.getLogger(__file__)
 
+def is_torch_npu_available() -> bool:
+    """Check the availability of NPU."""
+    try:
+        import torch.npu
+
+        return torch.npu.is_available()
+    except ImportError:
+        return False
+
+is_npu_available = is_torch_npu_available()
+
 
 def _get_current_mem_info(unit: str = "GB", precision: int = 2) -> Tuple[str]:
     """Get current memory usage."""
