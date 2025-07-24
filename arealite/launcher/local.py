@@ -12,6 +12,11 @@ import psutil
 
 from arealite.api.cli_args import SGLangConfig, vLLMConfig, parse_cli_args, to_structured_cfg
 from arealite.api.io_struct import AllocationMode, AllocationType
+from arealite.utils.device import is_npu_available
+VISIBLE_DEVICES_ENV = "ASCEND_RT_VISIBLE_DEVICES" if is_npu_available else "CUDA_VISIBLE_DEVICES"
+if is_npu_available:
+    import torch_npu
+    from torch_npu.contrib import transfer_to_npu
 from arealite.utils.network import find_free_ports, gethostip
 from realhf.base import gpu_utils, logging, name_resolve, names
 from realhf.scheduler.client import JobException, JobInfo, JobState
@@ -121,11 +126,11 @@ class LocalLauncher:
                     self._gpu_counter += 1
                     visible_devices.append(available_device_id)
                 if reset_gpu_counter:
-                    env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                    env_vars[VISIBLE_DEVICES_ENV] = ",".join(
                         str(j) for j in visible_devices
                     )
                 else:
-                    env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                    env_vars[VISIBLE_DEVICES_ENV] = ",".join(
                         str(self._cuda_devices[j]) for j in visible_devices
                     )
             c = (
@@ -143,7 +148,12 @@ class LocalLauncher:
                     "CONDA_EXE":parent_env['CONDA_EXE'],
                     "CONDA_DEFAULT_ENV":parent_env['CONDA_DEFAULT_ENV'],
                     "LD_LIBRARY_PATH":parent_env['LD_LIBRARY_PATH'],
-                    "PATH": parent_env['PATH']
+                    "PATH": parent_env['PATH'],
+                    "PYTHONPATH": parent_env['PYTHONPATH'],
+                    "ASCEND_TOOLKIT_HOME": parent_env['ASCEND_TOOLKIT_HOME'],
+                    "ASCEND_OPP_PATH": parent_env['ASCEND_OPP_PATH'],
+                    "ASCEND_AICPU_PATH": parent_env['ASCEND_AICPU_PATH'],
+                    "ASCEND_HOME_PATH": parent_env['ASCEND_HOME_PATH'],
                 }
                 process = subprocess.Popen(c, env =env_new, shell=isinstance(c, str))
             else:

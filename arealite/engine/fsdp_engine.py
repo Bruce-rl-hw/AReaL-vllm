@@ -15,6 +15,7 @@ from transformers import PreTrainedTokenizerFast
 from arealite.api.cli_args import TrainEngineConfig
 from arealite.api.engine_api import FinetuneSpec, SaveLoadMeta, WeightUpdateMeta
 from arealite.engine.base_hf_engine import BaseHFEngine
+from arealite.utils.device import is_npu_available
 from arealite.utils.fsdp import (
     CPUOffloadPolicy,
     MixedPrecisionPolicy,
@@ -202,10 +203,15 @@ class FSDPEngine(BaseHFEngine):
             loss *= loss_scale
             loss.backward()
 
-        # NOTE: grad norm clip function is different
-        grad_norm = fsdp2_clip_grad_norm_(
-            self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
-        )
+        if is_npu_available:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
+            )
+        else:
+            # NOTE: grad norm clip function is different
+            grad_norm = fsdp2_clip_grad_norm_(
+                self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
+            )
         if not torch.isfinite(grad_norm):
             self.optimizer.zero_grad()
             update_successful = False

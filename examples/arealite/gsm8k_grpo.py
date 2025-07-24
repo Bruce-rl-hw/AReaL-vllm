@@ -3,6 +3,10 @@ import re
 import sys
 
 import torch
+from arealite.utils.device import is_npu_available
+if is_npu_available:
+    import torch_npu
+    from torch_npu.contrib import transfer_to_npu
 import torch.distributed as dist
 from datasets import Dataset, load_dataset
 from datasets.distributed import split_dataset_by_node

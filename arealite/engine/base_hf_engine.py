@@ -28,6 +28,7 @@ from arealite.utils.data import (
     unpack_sequence,
     unsqueeze_mb_list,
 )
+from arealite.utils.device import is_npu_available
 from arealite.utils.fsdp import get_cosine_schedule_with_warmup
 from arealite.utils.model import disable_dropout_in_model
 from realhf.api.core.data_api import load_hf_tokenizer
@@ -67,12 +68,20 @@ class BaseHFEngine(TrainEngine):
 
     def create_process_group(self):
         if not dist.is_initialized():
+            if is_npu_available:
+                dist.init_process_group(
+                    backend="hccl",
+                    timeout=constants.NCCL_DEFAULT_TIMEOUT,
+                    world_size=int(os.environ["WORLD_SIZE"]),
+                    rank=int(os.environ["LOCAL_RANK"]),
+                )
+            else:
             # TODO: Handle the condition when WORLD_SIZE and RANK is not set in launcher
-            dist.init_process_group(
-                backend="nccl",
-                timeout=constants.NCCL_DEFAULT_TIMEOUT,
-                device_id=torch.device(int(os.environ["LOCAL_RANK"])),
-            )
+                dist.init_process_group(
+                    backend="nccl",
+                    timeout=constants.NCCL_DEFAULT_TIMEOUT,
+                    device_id=torch.device(int(os.environ["LOCAL_RANK"])),
+                )
             self.own_global_group = True
         self._parallelism_group = dist.new_group()
 
