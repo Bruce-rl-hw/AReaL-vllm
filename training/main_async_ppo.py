@@ -10,9 +10,14 @@ from omegaconf import MISSING, OmegaConf
 from realhf.api.quickstart.entrypoint import kind_reminder
 from realhf.experiments.async_exp.async_ppo_math_exp import AsyncPPOMATHConfig
 from training.utils import run_experiment
+from realhf.utils import is_npu_available
+if is_npu_available:
+    import torch
+    import torch_npu
+    from torch_npu.contrib import transfer_to_npu
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="async-ppo")
+@hydra.main(version_base=None, config_path="configs", config_name="async-ppo-vllm")
 def main_ppo_math(args):
     # NOTE: we import logging here to avoid hydra logging overwrite
     import realhf.base.logging as logging

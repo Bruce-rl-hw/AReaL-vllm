@@ -1,3 +1,19 @@
+import torch
+
+
+def is_torch_npu_available() -> bool:
+    """Check the availability of NPU."""
+    try:
+        import torch.npu
+
+        return torch.npu.is_available()
+    except ImportError:
+        return False
+
+
+is_npu_available = is_torch_npu_available()
+
+
 def download_from_huggingface(
     repo_id: str, filename: str, revision: str = "main", repo_type: str = "dataset"
 ) -> str:

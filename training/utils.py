@@ -18,6 +18,11 @@ from realhf.api.core.system_api import Experiment, ExperimentScheduling, TasksGr
 from realhf.base import constants, logging, name_resolve, names
 from realhf.system import WORKER_TYPES, load_worker
 from realhf.system.worker_base import AsyncWorker, Worker, WorkerServerStatus
+from realhf.utils import is_npu_available
+if is_npu_available:
+    device = "NPU"
+else:
+    device = "GPU"
 
 
 # Copied from SGLang
@@ -176,9 +181,9 @@ def _run_experiment(exp_cfg, expr_name, trial_name):
         if re.match(r"node:(\b(?:\d{1,3}\.){3}\d{1,3}\b)", k)
     ]
     n_nodes = len(all_available_nodes)
-    n_gpus_per_node = int(all_available_resources["GPU"] // n_nodes)
+    n_gpus_per_node = int(all_available_resources[device] // n_nodes)
     assert (
-        all_available_resources["GPU"] % n_nodes == 0
+        all_available_resources[device] % n_nodes == 0
     ), "AReaL assumes all nodes has the same number of GPUs."
 
     for worker_type in WORKER_TYPES:
@@ -191,7 +196,7 @@ def _run_experiment(exp_cfg, expr_name, trial_name):
         gpu = sch.scheduling.gpu * sch.count
         mem = sch.scheduling.mem * sch.count / 1024  # in GB
         acpu = available_resources.get("CPU", 0)
-        agpu = available_resources.get("GPU", 0)
+        agpu = available_resources.get(device, 0)
         amem = available_resources.get("memory", 0) / 1024**3
         if acpu < cpu or agpu < gpu or amem < mem:
             logger.critical(
@@ -217,7 +222,7 @@ def _run_experiment(exp_cfg, expr_name, trial_name):
                 bundles=[
                     {
                         "CPU": sch.scheduling.cpu * n_worker_per_node,
-                        "GPU": sch.scheduling.gpu * n_worker_per_node,
+                        device: sch.scheduling.gpu * n_worker_per_node,
                         "memory": sch.scheduling.mem
                         * 1024**2
                         * n_worker_per_node,  # in bytes
@@ -242,7 +247,8 @@ def _run_experiment(exp_cfg, expr_name, trial_name):
                     worker = RayWorker.options(
                         name=f"{worker_type}/{_idx}",
                         num_cpus=sch.scheduling.cpu,
-                        num_gpus=sch.scheduling.gpu,
+                        # FIXME adapt npu
+                        resources={device: sch.scheduling.gpu},
                         memory=sch.scheduling.mem * 1024**2,
                         scheduling_strategy=PlacementGroupSchedulingStrategy(
                             placement_group=placement_group,
@@ -265,7 +271,8 @@ def _run_experiment(exp_cfg, expr_name, trial_name):
                 worker = RayWorker.options(
                     name=f"{worker_type}/{_idx}",
                     num_cpus=sch.scheduling.cpu,
-                    num_gpus=sch.scheduling.gpu,
+                    #  FIXME adapt npu
+                    resources={device: sch.scheduling.gpu},
                     memory=sch.scheduling.mem * 1024**2,
                     scheduling_strategy="SPREAD",
                 ).remote(
@@ -331,10 +338,11 @@ class DualOutput:
 def run_experiment(exp_cfg, expr_name, trial_name):
     log_path = os.path.join(constants.get_log_path(exp_cfg), "main.log")
     with open(log_path, "a") as f:
-        # Create dual output handler
-        dual_out = DualOutput(f, sys.stdout)
-        dual_err = DualOutput(f, sys.stderr)
-
-        # Redirect stdout and stderr
-        with redirect_stdout(dual_out), redirect_stderr(dual_err):
-            _run_experiment(exp_cfg, expr_name, trial_name)
+        # FIXME adapt npu delete #
+        # # Create dual output handler
+        # dual_out = DualOutput(f, sys.stdout)
+        # dual_err = DualOutput(f, sys.stderr)
+        #
+        # # Redirect stdout and stderr
+        # with redirect_stdout(dual_out), redirect_stderr(dual_err):
+        _run_experiment(exp_cfg, expr_name, trial_name)

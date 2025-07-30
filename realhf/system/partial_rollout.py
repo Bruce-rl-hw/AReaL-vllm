@@ -102,6 +102,7 @@ class PartialRolloutManager:
         raw_gconfig,
     ):
         from realhf.impl.model.backend.sglang import SGLangAPIClient
+        from realhf.impl.model.backend.vllm import vLLMAPIClient
 
         max_new_tokens = min(raw_gconfig.max_new_tokens, self.new_tokens_per_chunk)
         max_new_tokens = min(
@@ -115,8 +116,9 @@ class PartialRolloutManager:
         assert self.tokenizer.pad_token_id is not None
         assert self.tokenizer.eos_token_id is not None
         # Don't need to request updating weights
-        async with SGLangAPIClient(
-            generate_url=f"{url}/generate", update_weights_url=""
+        # FIXME adapt npu
+        async with vLLMAPIClient(
+            generate_url=f"{url}/v1/completions", update_weights_url=""
         ) as api_client:
             res = await api_client.async_add_generate_request(
                 APIGenerateInput(

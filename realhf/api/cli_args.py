@@ -228,12 +228,18 @@ class OptimizerConfig:
 @dataclass
 class vLLMConfig:
     """Configuration for vLLM inference engine. Refer to:
-    https://github.com/vllm-project/vllm for detailed documentation.
+    https://github.com/vllm-project/vllm GitHub - vllm-project/vllm: A high-throughput and memory-efficient inference and serving engine for LLMs GitHub - vllm-project/vllm: A high-throughput and memory-efficient inference and serving engine for LLMs   for detailed documentation.
     """
+    model: str = ""
+    seed: int = 1
+    skip_tokenizer_init: bool = False
+    enforce_eager: bool = True
+    dtype: str = "bfloat16"
+    distributed_executor_backend = "mp"
 
+    # original
     max_num_seqs: int = 256
-    dtype: str = "float16"
-    kv_cache_type: str = "auto"
+    # kv_cache_type: str = "auto"
     num_scheduler_steps: int = 1
     multi_step_stream_outputs: bool = True
     block_size: int = 16
@@ -256,10 +262,52 @@ class vLLMConfig:
     enable_prefix_caching: bool = False
 
     gpu_memory_utilization: float = 0.9
+    # additional_engine_args: Dict = field(default_factory=dict)
 
-    enforce_eager: bool = False
-    hybrid_train: bool = False
-    additional_engine_args: Dict = field(default_factory=dict)
+    hybrid_train = False
+
+
+    @staticmethod
+    def build_cmd(
+        vllm_config: "vLLMConfig",
+        model_path,
+        tp_size,
+        server_index,
+        base_gpu_id,
+        dist_init_addr: Optional[str] = None,
+    ):
+        from realhf.base import constants, network, pkg_version, seeding
+        from realhf.experiments.common.utils import asdict as conf_as_dict
+
+        args: Dict = conf_as_dict(vllm_config)
+        print(f"----vllm args:{args}")
+
+        host = "localhost"
+        args = dict(
+            host=host,
+            # Model and tokenizer
+            tokenizer=vllm_config.model,
+            load_format="auto",
+            trust_remote_code=True,
+            device="cuda",
+            tensor_parallel_size=tp_size,
+            # dist_init_addr=dist_init_addr,
+            **args,
+        )
+
+
+        # convert to flags
+        flags = []
+        for k, v in args.items():
+            if v is None or v is False or v == "":
+                continue
+            if v is True:
+                flags.append(f"--{k.replace('_','-')}")
+            elif isinstance(v, list):
+                flags.append(f"--{k.replace('_','-')} {' '.join(map(str, v))}")
+            else:
+                flags.append(f"--{k.replace('_','-')} {v}")
+        return f"python3 -m vllm.entrypoints.openai.api_server {' '.join(flags)}"
 
 
 @dataclass

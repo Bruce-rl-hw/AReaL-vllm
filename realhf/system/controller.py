@@ -29,6 +29,7 @@ import realhf.api.core.system_api as system_api
 from realhf.base import constants, gpu_utils, logging, name_resolve, names, pkg_version
 from realhf.system import WORKER_TYPES, load_worker, worker_base, worker_control
 from realhf.system.worker_base import WorkerServerStatus as Wss
+from realhf.utils import is_npu_available
 
 flask_available = False
 if pkg_version.is_available("flask"):
@@ -534,7 +535,10 @@ class RayController:
                 mem += s.scheduling.mem * s.count / 1024  # in GB
         available_resources = ray.available_resources()
         acpu = available_resources.get("CPU", 0)
-        agpu = available_resources.get("GPU", 0)
+        if is_npu_available:
+            agpu = available_resources.get("NPU", 0)
+        else:
+            agpu = available_resources.get("GPU", 0)
         amem = available_resources.get("memory", 0) / 1024**3
         if acpu < cpu or agpu < gpu or amem < mem:
             logger.critical(
@@ -593,12 +597,12 @@ class RayController:
                     _comms = comms[i : i + n_gpus_per_node]
                     for _idx, (comm, sch) in enumerate(zip(_comms, _schedules)):
                         # Schedule jobs one-by-one to maintain the order on remote nodes.
+                        # FIXME adapt npu
                         job = ray.remote(
                             num_cpus=sch.scheduling.cpu,
-                            num_gpus=sch.scheduling.gpu,
+                            resources={"NPU": sch.scheduling.gpu},
                             memory=sch.scheduling.mem * 1024**2,
                             name=f"{worker_type}/{_idx + i}",
-                            resources={available_nodes[node_idx]: 1 / n_gpus_per_node},
                         )(run_ray_worker).remote(
                             worker_type,
                             _idx + i,

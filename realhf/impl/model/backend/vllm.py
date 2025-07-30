@@ -8,6 +8,14 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import transformers
 
+import json
+
+from realhf.api.core.model_api import (
+    LLMAPIClient,
+    APIGenerateInput,
+    APIGenerateOutput
+)
+
 try:
     from vllm import LLM
     from vllm.engine.arg_utils import EngineArgs
@@ -34,6 +42,91 @@ from realhf.api.core import data_api, model_api
 from realhf.base import constants, logging, seeding
 
 logger = logging.getLogger("vLLM backend")
+
+
+def remove_prefix(text: str, prefix: str) -> str:
+    return text[len(prefix):] if text.startswith(prefix) else text
+
+
+class vLLMAPIClient(LLMAPIClient):
+
+    async def _do_generate(
+            self, req: APIGenerateInput, stream: bool = False
+    ) -> APIGenerateOutput:
+        gconfig = req.gconfig
+
+        payload = {
+            "n": gconfig.n,
+            "prompt": req.input_ids,
+            "top_p": gconfig.top_p,
+            "top_k": gconfig.top_k,
+            "max_tokens": gconfig.max_new_tokens,
+            "temperature": 0.0 if gconfig.greedy else gconfig.temperature,
+            "stop_token_ids": req.stop_token_ids,
+            "logprobs": 0,
+            "return_tokens_as_token_ids": True,
+            "stream": stream,
+        }
+
+        assert not stream, "streaming mode not yet implemented"
+        outputs = [APIGenerateOutput.from_input(req) for _ in range(gconfig.n)]
+        most_recent_timestamps = [time.perf_counter() for _ in range(gconfig.n)]
+        output_idx = 0
+
+        # The following code is partially adopted from sglang/bench_serving.py
+        st = time.perf_counter()
+        async with self.session.post(url=self.generate_url, json=payload) as response:
+            response.raise_for_status()
+            async for chunk_bytes in response.content:
+                chunk_bytes = chunk_bytes.strip()
+                if not chunk_bytes:
+                    continue
+
+                chunk = remove_prefix(chunk_bytes.decode("utf-8"), "data: ")
+                latency = time.perf_counter() - st
+                if chunk == "[DONE]":
+                    pass
+                else:
+                    data = json.loads(chunk)
+
+                    if choices := data.get("choices"):
+                        for choice in choices:
+                            output = outputs[output_idx]
+                            tokens = choice["token_ids"]["tokens"]
+                            token_ids = [int(t.split(":")[1]) for t in tokens]
+                            output.output_ids = [token_ids]
+
+                            finish_reason = choice.get("finish_reason")
+                            if req.return_logprob:
+                                output.output_logprobs = [choice.get("logprobs").get("token_logprobs")]
+                            assert finish_reason in [
+                                "length",
+                                "stop",
+                            ], finish_reason
+                            output.no_eos = [finish_reason == "length"]
+                            output.latency = latency
+
+                            output_idx += 1
+
+        return APIGenerateOutput.concat(outputs)
+
+    async def async_update_weights_from_disk(self, path, retries=5):
+        for _ in range(retries):
+            async with self.session.post(
+                    url=self.update_weights_url,
+                    json=dict(model_path=path),
+            ) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    success = res["success"]
+                    if success:
+                        return
+                    logger.warning(
+                        f"Update weights failed: {res['message']}. Retrying."
+                    )
+                logger.warning(f"Update weights failed: {resp.reason}. Retrying.")
+            time.sleep(0.1)
+        raise RuntimeError("Update weights failed.")
 
 
 class vLLMGenerationEngine(model_api.PipelinableEngine, LLM):

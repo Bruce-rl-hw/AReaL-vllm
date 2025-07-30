@@ -53,6 +53,8 @@ class AsyncPPOMATHConfig(AsyncRLExperimentConfig, PPOMATHConfig):
 
     @property
     def gen_backend_args(self) -> Any:
+        if self.actor.vllm:
+            return self.actor.vllm
         return self.actor.sglang
 
     @property

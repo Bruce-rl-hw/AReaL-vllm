@@ -8,6 +8,7 @@ import ray
 import requests
 
 from realhf.api.cli_args import SGLangConfig
+from realhf.api.cli_args import vLLMConfig
 from realhf.api.core.system_api import ExpStatus
 from realhf.api.core.system_api import GenerationServer as GenerationServerConfig
 from realhf.base import (
@@ -153,7 +154,9 @@ class GenerationServer(Worker):
         assert config.backend_type == "sglang"
 
         host_ip = network.gethostip()
-        host = "localhost" if not config.backend_args.enable_metrics else host_ip
+        # FIXME adapt npu
+        # host = "localhost" if not config.backend_args.enable_metrics else host_ip
+        host = host_ip
 
         # NOTE: Ports returned by `find_multiple_free_ports` are unique,
         # but SGLang servers still encounter conflicts.
@@ -173,7 +176,8 @@ class GenerationServer(Worker):
         server_port = ports[0]
         nccl_port = ports[1]
 
-        cmd = SGLangConfig.build_cmd(
+        #FIXME adapt npu
+        cmd = vLLMConfig.build_cmd(
             config.backend_args,
             config.model_path,
             tp_size=config.tp_size,
