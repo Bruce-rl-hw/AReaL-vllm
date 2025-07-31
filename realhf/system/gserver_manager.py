@@ -228,9 +228,7 @@ class GserverManager(Worker):
             constants.experiment_name(), constants.trial_name()
         )
         try:
-            # FIXME adapt npu DELETE #
-            # exp_status = name_resolve.wait(name, timeout=300)
-            exp_status = str(ExpStatus.RUNNING)
+            exp_status = name_resolve.wait(name, timeout=300)
             if exp_status != str(ExpStatus.RUNNING):
                 self.exit()
                 return PollResult(0, 0)
@@ -244,9 +242,7 @@ class GserverManager(Worker):
         with self.threading_lock:
             # FIXME: we create a sync point across servers to update weights,
             # but we can acutally update them individually
-            # FIXME adapt npu DELETE #
-            #new_param_path = self.check_new_params()
-            new_param_path = "/sfs_turbo/models/qwen3_1_7b"
+            new_param_path = self.check_new_params()
             if new_param_path is not None:
 
                 def _run_in_thread():

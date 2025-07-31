@@ -217,9 +217,7 @@ class RolloutWorker(AsyncWorker):
             constants.experiment_name(), constants.trial_name()
         )
         try:
-            # FIXME adapt npu delete #
-            #exp_status = name_resolve.wait(name, timeout=300)
-            exp_status = str(ExpStatus.RUNNING)
+            exp_status = name_resolve.wait(name, timeout=300)
             if exp_status != str(ExpStatus.RUNNING):
                 self.exit()
                 return PollResult(0, 0)
@@ -228,15 +226,14 @@ class RolloutWorker(AsyncWorker):
                 f"Waiting for experiment status timeout. "
                 "This indicates that the master worker is not running. Exit the worker."
             )
-        # FIXME adapt npu delete #
-        # if self.push_stream is None:
-        #     # Initialize stream after configure to ensure that puller names have been written.
-        #     self.push_stream = NameResolvingZmqPusher(
-        #         self.experiment_name,
-        #         self.trial_name,
-        #         pusher_index=self.worker_index,
-        #         pusher_cnt=self.worker_count,
-        #     )
+        if self.push_stream is None:
+            # Initialize stream after configure to ensure that puller names have been written.
+            self.push_stream = NameResolvingZmqPusher(
+                self.experiment_name,
+                self.trial_name,
+                pusher_index=self.worker_index,
+                pusher_cnt=self.worker_count,
+            )
 
         if self.gserver_manager_addr is None:
             name = names.gen_server_manager(self.experiment_name, self.trial_name)
