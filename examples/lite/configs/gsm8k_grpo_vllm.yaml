@@ -1,18 +1,18 @@
 ﻿experiment_name: gsm8k-grpo
 trial_name: trial0
 #allocation_mode: sglang.d4p1t1+d4p1t1
-allocation_mode: vllm.d1p1t1+d1p1t1
+allocation_mode: vllm.d2p1t1+d2p1t1
 cluster:
   fileroot: /data/b84412626/experiments
   n_nodes: 1
-  n_gpus_per_node: 2
+  n_gpus_per_node: 4
   name_resolve:
     type: nfs
     nfs_record_root: /data/b84412626/name_resolve
 seed: 1
 total_train_epochs: 4
 tokenizer_path: ${actor.path}
-async_training: false
+async_training: true
 
 rollout:
   experiment_name: ${experiment_name}
@@ -90,7 +90,7 @@ ref:
 vllm:
   model: ${actor.path}
   seed: ${seed}
-  skip_tokenizer_init: true
+  skip_tokenizer_init: false
   dtype: ${actor.dtype}
   max_model_len: 8192
   gpu_memory_utilization: 0.9

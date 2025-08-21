@@ -205,15 +205,18 @@ def main(args):
 
         with stats_tracker.record_timing("update_weights"):
             rollout.pause()
-            # if dist.get_rank() == 0:
             
-            # FIXME meta.path 需要更新，不能使用sglang的路径
+            # CRITICAL: Only rank 0 should call remote weight update!
+            if dist.get_rank() == 0:
+                future = rollout.update_weights(weight_update_meta)
             
-            
+            # All ranks update local weights
             actor.upload_weights(weight_update_meta)
-            rollout.update_weights(weight_update_meta)
-            # if dist.get_rank() == 0:
-            #     future.result()
+            
+            # Only rank 0 waits for remote update completion
+            if dist.get_rank() == 0:
+                future.result()
+                
             dist.barrier(device_ids=[actor.device.index])
             torch.cuda.synchronize()
             rollout.resume()
