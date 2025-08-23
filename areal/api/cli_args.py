@@ -310,6 +310,7 @@ class vLLMConfig:
     """Configuration for vLLM runtime.
     """
     model: str = ""
+    tokenizer: str = ""  # 独立的tokenizer路径，默认为空时使用model路径
     seed: int = 1
     skip_tokenizer_init: bool = False
     enforce_eager: bool = True
@@ -357,8 +358,8 @@ class vLLMConfig:
         args = dict(
             host=host,
             port=port,
-            # Model and tokenizer
-            tokenizer=vllm_config.model,
+            # Model and tokenizer - 暂时写死tokenizer路径
+            tokenizer="/data/b84412626/experiments/tokenizer/b84412626/gsm8k-grpo/trial0",
             load_format="auto",
             trust_remote_code=True,
             device="cuda",
@@ -861,6 +862,13 @@ class BaseExperimentConfig:
         },
     )
     tokenizer_path: str = field(default="")
+    experiment_tokenizer_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to the experiment-specific tokenizer directory. "
+            "Used to ensure consistent tokenizer across training and inference."
+        },
+    )
 
     train_dataset: DatasetConfig = field(default_factory=DatasetConfig)
     valid_dataset: Optional[DatasetConfig] = field(default=None)
