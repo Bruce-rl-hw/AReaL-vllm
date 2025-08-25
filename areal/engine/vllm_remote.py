@@ -118,7 +118,6 @@ class RemotevLLMEngine(InferenceEngine):
                 server_addr = self.rid_to_address[req.rid]
             else:
                 server_addr = self.choose_server()
-<<<<<<< HEAD
 
             if req.rid not in self.rid_to_address or self.rid_to_address[req.rid] != server_addr:
                 if len(self.rid_queue) >= RID_CACHE_SIZE:
@@ -143,6 +142,8 @@ class RemotevLLMEngine(InferenceEngine):
                 "temperature": 0.0 if gconfig.greedy else gconfig.temperature,
                 "logprobs": 1,
                 "stream": False,
+                # Ask server to return token ids directly if supported
+                "return_tokens_as_token_ids": True,
             }
             if stop_sequences:
                 payload["stop"] = stop_sequences
@@ -160,54 +161,11 @@ class RemotevLLMEngine(InferenceEngine):
             )
 
             start_time = time.perf_counter()
-            accumulated_output_tokens: List[int] = []
-            accumulated_output_logprobs: List[float] = []
-            accumulated_versions: List[int] = []
-            stop_reason = "length"
-            step_idx = 0
-
-=======
-
-            if req.rid not in self.rid_to_address or self.rid_to_address[req.rid] != server_addr:
-                if len(self.rid_queue) >= RID_CACHE_SIZE:
-                    oldest = self.rid_queue.pop(0)
-                    self.rid_to_address.pop(oldest, None)
-                self.rid_to_address[req.rid] = server_addr
-                self.rid_queue.append(req.rid)
-
-            tokenizer = tokenizer or req.tokenizer
-            if tokenizer is None:
-                raise RuntimeError("Tokenizer required for vLLM remote.")
-
-            stop_sequences: List[str] | None = None
-            if gconfig.stop_token_ids:
-                stop_sequences = [tokenizer.decode([tid]) for tid in gconfig.stop_token_ids]
-
-            # 修复关键问题：用文本而不是token ID作为prompt，避免服务端和本地tokenizer不匹配
-            prompt_text = tokenizer.decode(req.input_ids, skip_special_tokens=False)
-            payload = {
-                "prompt": prompt_text,
-                "top_p": gconfig.top_p,
-                "top_k": gconfig.top_k,
-                "max_tokens": gconfig.max_new_tokens,
-                "temperature": 0.0 if gconfig.greedy else gconfig.temperature,
-                "logprobs": 1,
-                "stream": False,
-            }
-            if stop_sequences:
-                payload["stop"] = stop_sequences
-
-            start_time = time.perf_counter()
-            accumulated_output_tokens: List[int] = []
-            accumulated_output_logprobs: List[float] = []
-            accumulated_versions: List[int] = []
+            accumulated_output_tokens, accumulated_output_logprobs, accumulated_versions = [], [], []
             stop_reason = "length"
 
->>>>>>> f5658fc4f05dae681a9aa118666d0697224102fb
-            while (
-                stop_reason not in ["stop", "abort"]  # Handle both normal stop and interrupt abort
-                and len(accumulated_output_tokens) < gconfig.max_new_tokens
-            ):
+            # --------------------------------- simplified loop ---------------------------------
+            while payload["max_tokens"] > 0:
                 result = await arequest_with_retry(
                     session=self.workflow_executor.session,
                     addr=server_addr,
@@ -218,61 +176,68 @@ class RemotevLLMEngine(InferenceEngine):
                     timeout=self.config.request_timeout,
                 )
 
-                choice = result["choices"][0]
-                stop_reason = choice.get("finish_reason", "stop")
-                
-                # Skip if interrupted before any generation
-                if stop_reason == "abort" and not choice["logprobs"]["tokens"]:
-                    await asyncio.sleep(0.1)  # Brief wait before retry
-                    continue
+                meta_info = result["choices"][0]
 
-<<<<<<< HEAD
-                vllm_tokens = choice["logprobs"]["tokens"]
-                output_logprobs = choice["logprobs"]["token_logprobs"]
-                output_tokens = tokenizer.convert_tokens_to_ids(vllm_tokens)
-                if isinstance(output_tokens, list) and any(t is None for t in output_tokens):
-                    unk_id = getattr(tokenizer, "unk_token_id", None)
-                    replacement = unk_id if isinstance(unk_id, int) else 0
-                    output_tokens = [t if t is not None else replacement for t in output_tokens]
-=======
-                # 修复关键问题：直接使用服务端返回的文本，而不是转换token string
-                srv_text = choice.get("text", "")
-                # 对服务器返回的纯文本进行本地encode，避免tokenizer不匹配导致的None->0问题
-                output_tokens = tokenizer.encode(srv_text, add_special_tokens=False)
-                output_logprobs = choice["logprobs"]["token_logprobs"]
->>>>>>> f5658fc4f05dae681a9aa118666d0697224102fb
+                # ---- finish / abort handling ----
+                finish_reason = meta_info["finish_reason"]
+                stop_reason = finish_reason  # keep the same naming as the reference snippet
+                if (
+                    stop_reason == "abort"
+                    and isinstance(finish_reason, dict)
+                    and finish_reason.get("message") == "Abort before prefill"
+                ):
+                    continue  # retry the loop immediately
 
+                # ---- parse tokens ----
+                output_tokens_raw = meta_info["logprobs"]["tokens"]
+                output_tokens = [int(t.split(":")[1]) for t in output_tokens_raw]
+                output_logprobs = meta_info["logprobs"]["token_logprobs"]
+
+                # ---- accumulate ----
                 accumulated_output_tokens.extend(output_tokens)
                 accumulated_output_logprobs.extend(output_logprobs)
                 accumulated_versions.extend([-1] * len(output_tokens))
+
+                 # ——放在你每轮 result/choice 处理后（accumulated_output_tokens 已更新）——
+                srv_text = meta_info.get("text", "") or ""
+                try:
+                    client_decoded = tokenizer.decode(
+                        accumulated_output_tokens, skip_special_tokens=False
+                    )
+                except Exception as e:
+                    client_decoded = f"<decode_error: {e}"
+
+                # 只截前 300 个可视字符，换行显示成 ⏎，避免刷屏
+                def _head(s: str, n: int = 300) -> str:
+                    try:
+                        s = s.replace("\n", " ⏎ ")
+                    except Exception:
+                        pass
+                    return (s[:n] + (" …" if len(s) > n else "")) if isinstance(s, str) else str(s)
+
+                logger.warning(
+                    "=== TEXT vs DECODE (rid=%s addr=%s step_tokens=%d stop=%s) ===\n"
+                    "[server text] %s\n"
+                    "[client decode] %s",
+                    getattr(req, "rid", None),
+                    server_addr,
+                    len(accumulated_output_tokens),
+                    stop_reason,
+                    _head(srv_text),
+                    _head(client_decoded),
+                )
 
                 if (
                     stop_reason not in ["stop", "abort"]
                     and len(accumulated_output_tokens) < gconfig.max_new_tokens
                 ):
-<<<<<<< HEAD
                     payload["prompt"] = req.input_ids + accumulated_output_tokens
                     payload["max_tokens"] = gconfig.max_new_tokens - len(accumulated_output_tokens)
                 else:
                     break
-                step_idx += 1
+            # --------------------------------- simplified loop end -----------------------------
 
             latency = time.perf_counter() - start_time
-            
-=======
-                    # 修复关键问题：用文本拼接继续生成，而不是token回灌
-                    prompt_text = prompt_text + srv_text
-                    payload["prompt"] = prompt_text
-                    payload["max_tokens"] = gconfig.max_new_tokens - len(tokenizer.encode(srv_text, add_special_tokens=False))
-                else:
-                    break
-
-            latency = time.perf_counter() - start_time
-            
-
-
-            
->>>>>>> f5658fc4f05dae681a9aa118666d0697224102fb
             return ModelResponse(
                 input_tokens=req.input_ids,
                 input_images=req.image_data,
@@ -281,7 +246,7 @@ class RemotevLLMEngine(InferenceEngine):
                 output_versions=accumulated_versions,
                 stop_reason=stop_reason,
                 latency=latency,
-                ttft=latency,
+                ttft=latency,  # non-streaming
                 tokenizer=req.tokenizer,
                 processor=req.processor,
             )
@@ -474,9 +439,3 @@ def update_weights_from_disk_vllm(
 
     return asyncio.run(_run())
 
-<<<<<<< HEAD
-=======
-
-
-
->>>>>>> f5658fc4f05dae681a9aa118666d0697224102fb
