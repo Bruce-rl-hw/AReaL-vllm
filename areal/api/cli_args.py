@@ -12,6 +12,7 @@ from hydra import initialize as hydra_init
 from omegaconf import MISSING, OmegaConf
 
 from areal.utils.fs import get_user_tmp
+from areal.utils.device_manager import get_device_type, validate_device_compatibility
 
 
 @dataclass
@@ -70,6 +71,12 @@ class GenerationHyperparameters:
     temperature: float = field(
         default=1.0,
         metadata={"help": "Sampling temperature. Higher values increase diversity."},
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Repetition penalty (>1 discourages repeats, <1 encourages). 1.0 disables."
+        },
     )
     stop_token_ids: List[int] = field(
         default_factory=list,
@@ -311,6 +318,7 @@ class vLLMConfig:
     """
     model: str = ""
     tokenizer: str = ""  # 独立的tokenizer路径，默认为空时使用model路径
+    device: str = "npu"  # 设备类型: cuda/npu/cpu，默认cuda
     seed: int = 1
     skip_tokenizer_init: bool = False
     enforce_eager: bool = True
@@ -320,6 +328,16 @@ class vLLMConfig:
     # original
     max_num_seqs: int = 256
     # kv_cache_type: str = "auto"
+    
+    def __post_init__(self):
+        """Post-initialization to validate and auto-detect device."""
+        # Auto-detect device if not explicitly set or set to "auto"
+        if self.device == "auto":
+            self.device = get_device_type()
+        
+        # Validate device compatibility
+        if not validate_device_compatibility(self.device):
+            raise ValueError(f"Device '{self.device}' is not available in current environment")
     num_scheduler_steps: int = 1
     multi_step_stream_outputs: bool = True
     block_size: int = 16
@@ -358,11 +376,11 @@ class vLLMConfig:
         args = dict(
             host=host,
             port=port,
-            # Model and tokenizer - 暂时写死tokenizer路径
-            tokenizer="/data/b84412626/experiments/tokenizer/b84412626/gsm8k-grpo/trial0",
+            # Model and tokenizer
+            tokenizer=vllm_config.model,
             load_format="auto",
             trust_remote_code=True,
-            device="cuda",
+            device=vllm_config.device or "cuda",
             tensor_parallel_size=tp_size,
             **args,
         )
@@ -862,13 +880,6 @@ class BaseExperimentConfig:
         },
     )
     tokenizer_path: str = field(default="")
-    experiment_tokenizer_dir: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the experiment-specific tokenizer directory. "
-            "Used to ensure consistent tokenizer across training and inference."
-        },
-    )
 
     train_dataset: DatasetConfig = field(default_factory=DatasetConfig)
     valid_dataset: Optional[DatasetConfig] = field(default=None)

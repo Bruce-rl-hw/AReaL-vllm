@@ -24,12 +24,101 @@ try:
     from flash_attn import (
         flash_attn_func,
         flash_attn_varlen_func,
-        flash_attn_with_kvcache,
+        _kvcacheflash_attn_with,
     )
 except ModuleNotFoundError:
     pass
 
+# NPU FlashAttention support
+try:
+    import torch_npu
+    HAS_NPU = True
+except ModuleNotFoundError:
+    HAS_NPU = False
+
 logger = logging.getLogger("Attention")
+
+
+def flash_attn_with_kvcache(
+    q, k_cache, v_cache, k=None, v=None, cache_seqlens=None, 
+    softmax_scale=None, causal=False, rotary_cos=None, rotary_sin=None, 
+    rotary_interleaved=False
+):
+    """Unified interface for flash attention with kv cache"""
+    if HAS_NPU and str(q.device).startswith('npu'):
+        # NPU implementation using torch_npu.npu_incre_flash_attention
+        if k is not None and v is not None:
+            # Update cache
+            batch_size = q.shape[0]
+            for i in range(batch_size):
+                seq_len = cache_seqlens[i] if cache_seqlens is not None else 0
+                k_cache[i, seq_len] = k[i]
+                v_cache[i, seq_len] = v[i]
+        
+        # Prepare inputs for NPU
+        num_heads = q.shape[2] if len(q.shape) == 4 else q.shape[1]
+        scale_value = softmax_scale if softmax_scale is not None else 1.0
+        
+        # Convert cache_seqlens to actual_seq_lengths for NPU
+        actual_seq_lengths = None
+        if cache_seqlens is not None:
+            actual_seq_lengths = [int(x) + 1 for x in cache_seqlens]
+        
+        # Call NPU flash attention
+        return torch_npu.npu_incre_flash_attention(
+            q.squeeze(1), k_cache.flatten(-2), v_cache.flatten(-2),
+            num_heads=num_heads,
+            scale_value=scale_value,
+            input_layout="BSH",
+            actual_seq_lengths=actual_seq_lengths
+        ).unsqueeze(1)
+    else:
+        # GPU implementation - use the imported function
+        return _kvcacheflash_attn_with(
+            q, k_cache, v_cache, k=k, v=v, cache_seqlens=cache_seqlens,
+            softmax_scale=softmax_scale, causal=causal, 
+            rotary_cos=rotary_cos, rotary_sin=rotary_sin,
+            rotary_interleaved=rotary_interleaved
+        )
+
+
+def flash_attn_varlen_func_unified(
+    q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+    dropout_p=0.0, softmax_scale=None, causal=True
+):
+    """Unified interface for variable length flash attention"""
+    if HAS_NPU and str(q.device).startswith('npu'):
+        # NPU implementation using torch_npu.npu_fusion_attention
+        num_heads = q.shape[1] if len(q.shape) == 3 else q.shape[2]
+        scale_value = softmax_scale if softmax_scale is not None else (1.0 / (q.shape[-1] ** 0.5))
+        
+        # Convert cu_seqlens to actual_seq_lengths
+        actual_seq_qlen = cu_seqlens_q[1:].cpu().numpy().tolist()
+        actual_seq_kvlen = cu_seqlens_k[1:].cpu().numpy().tolist() if cu_seqlens_k is not None else actual_seq_qlen
+        
+        # Prepare attention mask for causal
+        atten_mask = None
+        sparse_mode = 0
+        if causal:
+            # Use sparse_mode instead of explicit mask for better performance
+            sparse_mode = 3  # rightDown causal (flash-attention 2.1+)
+        
+        return torch_npu.npu_fusion_attention(
+            q, k, v, num_heads,
+            input_layout="TND",
+            scale=scale_value,
+            keep_prob=1.0 - dropout_p,
+            atten_mask=atten_mask,
+            actual_seq_qlen=tuple(actual_seq_qlen),
+            actual_seq_kvlen=tuple(actual_seq_kvlen),
+            sparse_mode=sparse_mode
+        )[0]
+    else:
+        # GPU implementation
+        return flash_attn_varlen_func(
+            q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+            dropout_p=dropout_p, softmax_scale=softmax_scale, causal=causal
+        )
 
 
 class CausalSelfAttentionLayer(nn.Module):
@@ -286,7 +375,7 @@ class CausalSelfAttentionLayer(nn.Module):
         elif cu_seqlens is not None:
             assert max_seqlen is not None
             assert len(q.shape) == 3
-            hidden_states = flash_attn_varlen_func(
+            hidden_states = flash_attn_varlen_func_unified(
                 q,
                 k,
                 v,
