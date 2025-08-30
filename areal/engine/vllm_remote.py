@@ -18,7 +18,6 @@ from areal.api.engine_api import InferenceEngine
 from areal.api.io_struct import FinetuneSpec, ModelRequest, ModelResponse, WeightUpdateMeta
 from areal.api.workflow_api import RolloutWorkflow, WorkflowExecutor
 from areal.utils.http import arequest_with_retry, get_default_connector
-from areal.utils.npu import is_npu_available, prepare_npu_for_vllm
 from realhf.base import logging, name_resolve, names
 
 logger = logging.getLogger(__name__)
@@ -30,15 +29,6 @@ class RemotevLLMEngine(InferenceEngine):
     def __init__(self, config: InferenceEngineConfig):
         # Basic config and addresses
         self.config = config
-        
-        # Setup NPU environment if NPU device is specified
-        if hasattr(config, 'device') and config.device == 'npu':
-            if is_npu_available():
-                prepare_npu_for_vllm()
-                logger.info("NPU environment prepared for vLLM")
-            else:
-                logger.warning("NPU device specified but torch_npu not available, falling back to CPU/CUDA")
-        
         raw_addrs = os.getenv("AREAL_LLM_SERVER_ADDRS", "").strip()
         if not raw_addrs:
             raise RuntimeError("AREAL_LLM_SERVER_ADDRS is not set for vLLM remote.")
@@ -144,15 +134,12 @@ class RemotevLLMEngine(InferenceEngine):
             if gconfig.stop_token_ids:
                 stop_sequences = [tokenizer.decode([tid]) for tid in gconfig.stop_token_ids]
 
-            # Decode token ids into text for vLLM OpenAI endpoint
-            prompt_text = tokenizer.decode(req.input_ids, skip_special_tokens=False)
             payload = {
-                "prompt": prompt_text,
+                "prompt": req.input_ids,
                 "top_p": gconfig.top_p,
                 "top_k": gconfig.top_k,
                 "max_tokens": gconfig.max_new_tokens,
                 "temperature": 0.0 if gconfig.greedy else gconfig.temperature,
-                "repetition_penalty": getattr(gconfig, "repetition_penalty", 1.0),
                 "logprobs": 1,
                 "stream": False,
                 # Ask server to return token ids directly if supported
@@ -244,11 +231,7 @@ class RemotevLLMEngine(InferenceEngine):
                     stop_reason not in ["stop", "abort"]
                     and len(accumulated_output_tokens) < gconfig.max_new_tokens
                 ):
-                    # Continue with decoded text to avoid list[int] prompt issues
-                    payload["prompt"] = tokenizer.decode(
-                        req.input_ids + accumulated_output_tokens,
-                        skip_special_tokens=False,
-                    )
+                    payload["prompt"] = req.input_ids + accumulated_output_tokens
                     payload["max_tokens"] = gconfig.max_new_tokens - len(accumulated_output_tokens)
                 else:
                     break

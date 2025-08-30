@@ -13,6 +13,10 @@ seed: 1
 total_train_epochs: 4
 tokenizer_path: ${actor.path}
 async_training: true
+# 解决方案：固化实验tokenizer目录，避免训练时tokenizer不一致问题
+experiment_tokenizer_dir: &experiment_tokenizer_dir "/data/b84412626/experiments/tokenizer/b84412626/gsm8k-grpo/trial0"
+tokenizer_path: *experiment_tokenizer_dir
+async_training: true
 
 rollout:
   experiment_name: ${experiment_name}
@@ -89,8 +93,7 @@ ref:
 
 vllm:
   model: ${actor.path}
-  # Set device to 'cuda' (default) or 'npu' for Ascend; requires vLLM with NPU support
-  device: npu
+  tokenizer: *experiment_tokenizer_dir  # 使用固化的实验tokenizer目录
   seed: ${seed}
   skip_tokenizer_init: false
   dtype: ${actor.dtype}
