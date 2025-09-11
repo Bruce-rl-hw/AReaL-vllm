@@ -45,20 +45,41 @@ def fsdp2_clip_grad_norm_(
         parameters = list(parameters)
     grads = [p.grad for p in parameters if p.grad is not None]
     total_norm = _get_total_norm(grads, norm_type, error_if_nonfinite, foreach)
-    total_norm = total_norm.to(torch.cuda.current_device(), non_blocking=True)
+    
+    # 自动检测当前设备类型
+    current_device = None
+    try:
+        from areal.utils.npu import is_npu_available
+        if is_npu_available():
+            current_device = torch.npu.current_device()
+        else:
+            current_device = torch.cuda.current_device()
+    except ImportError:
+        current_device = torch.cuda.current_device()
+    
+    total_norm = total_norm.to(current_device, non_blocking=True)
 
     _clip_grads_with_norm_(parameters, max_norm, total_norm, foreach)
     return total_norm
 
 
 def create_fsdp_device_mesh(shard_size, world_size):
+    # 自动检测设备类型：NPU优先，然后是CUDA
+    device_type = "cuda"  # 默认值
+    try:
+        from areal.utils.npu import is_npu_available
+        if is_npu_available():
+            device_type = "npu"
+    except ImportError:
+        pass
+    
     if shard_size < 0 or shard_size >= world_size:
         device_mesh = init_device_mesh(
-            "cuda", mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
+            device_type, mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
         )
     else:
         device_mesh = init_device_mesh(
-            "cuda",
+            device_type,
             mesh_shape=(world_size // shard_size, shard_size),
             mesh_dim_names=("ddp", "fsdp"),
         )
@@ -119,7 +140,18 @@ def fsdp2_load_full_state_dict(
         set_model_state_dict,
     )
 
-    device = torch.cuda.current_device()
+    # 自动检测当前设备类型
+    current_device = None
+    try:
+        from areal.utils.npu import is_npu_available
+        if is_npu_available():
+            current_device = torch.npu.current_device()
+        else:
+            current_device = torch.cuda.current_device()
+    except ImportError:
+        current_device = torch.cuda.current_device()
+
+    device = current_device
     model = model.to(device=device, non_blocking=True)
     cpu_offload = cpu_offload is not None
     options = StateDictOptions(
@@ -188,3 +220,4 @@ def get_cosine_schedule_with_warmup(
         return max(min_lr_ratio, x * coef + intercept)
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+

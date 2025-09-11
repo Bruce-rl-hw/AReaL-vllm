@@ -82,13 +82,37 @@ class LocalLauncher:
         self._job_states = {}
 
         self._gpu_counter = 0
-        self._cuda_devices: List[str] = os.environ.get(
-            "CUDA_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count())))
-        ).split(",")
+        
+        # 检测设备类型并设置设备可见性
+        try:
+            from areal.utils.npu import is_npu_available
+            if is_npu_available():
+                # NPU环境
+                self._cuda_devices: List[str] = os.environ.get(
+                    "NPU_VISIBLE_DEVICES", 
+                    os.environ.get("ASCEND_RT_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count()))))
+                ).split(",")
+                device_type = "NPU"
+                device_env = "NPU_VISIBLE_DEVICES/ASCEND_RT_VISIBLE_DEVICES"
+            else:
+                # GPU环境
+                self._cuda_devices: List[str] = os.environ.get(
+                    "CUDA_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count())))
+                ).split(",")
+                device_type = "GPU"
+                device_env = "CUDA_VISIBLE_DEVICES"
+        except ImportError:
+            # 回退到GPU
+            self._cuda_devices: List[str] = os.environ.get(
+                "CUDA_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count())))
+            ).split(",")
+            device_type = "GPU"
+            device_env = "CUDA_VISIBLE_DEVICES"
+            
         if len(self._cuda_devices) < 1:
             raise RuntimeError(
-                f"Local mode can only run when there is at least one GPU. "
-                f"CUDA_VISIBLE_DEVICES is currently set to {os.environ['CUDA_VISIBLE_DEVICES']}."
+                f"Local mode can only run when there is at least one {device_type}. "
+                f"{device_env} is currently set to {os.environ.get(device_env.split('/')[0], 'not set')}."
             )
 
     @property
@@ -124,20 +148,44 @@ class LocalLauncher:
         offset = self._job_counter[job_name]
         for i in range(count):
             if gpu > 0:
-                # Allocate GPUs in a round-robin manner
+                # Allocate GPUs/NPUs in a round-robin manner
                 visible_devices = []
                 for _ in range(gpu):
                     available_device_id = self._gpu_counter % len(self._cuda_devices)
                     self._gpu_counter += 1
                     visible_devices.append(available_device_id)
-                if reset_gpu_counter:
-                    env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
-                        str(j) for j in visible_devices
-                    )
-                else:
-                    env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
-                        str(self._cuda_devices[j]) for j in visible_devices
-                    )
+                
+                # 检测设备类型并设置对应的环境变量
+                try:
+                    from areal.utils.npu import is_npu_available
+                    if is_npu_available():
+                        # NPU环境：设置NPU设备可见性
+                        if reset_gpu_counter:
+                            device_list = ",".join(str(j) for j in visible_devices)
+                        else:
+                            device_list = ",".join(str(self._cuda_devices[j]) for j in visible_devices)
+                        env_vars["NPU_VISIBLE_DEVICES"] = device_list
+                        env_vars["ASCEND_RT_VISIBLE_DEVICES"] = device_list
+                    else:
+                        # GPU环境：原有CUDA逻辑
+                        if reset_gpu_counter:
+                            env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                                str(j) for j in visible_devices
+                            )
+                        else:
+                            env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                                str(self._cuda_devices[j]) for j in visible_devices
+                            )
+                except ImportError:
+                    # 回退到CUDA
+                    if reset_gpu_counter:
+                        env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                            str(j) for j in visible_devices
+                        )
+                    else:
+                        env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(
+                            str(self._cuda_devices[j]) for j in visible_devices
+                        )
             c = (
                 " ".join(str(k) + "=" + str(v) for k, v in env_vars.items())
                 + " stdbuf -oL "
@@ -147,6 +195,21 @@ class LocalLauncher:
             logger.info("Starting local process with command: %s", c)
             if new_env:
                 parent_env = os.environ.copy()
+                # 动态设置设备可见性，避免使用rank 0
+                device_env = {}
+                try:
+                    from areal.utils.npu import is_npu_available
+                    if is_npu_available():
+                        # NPU环境：避免使用NPU 0
+                        device_env["NPU_VISIBLE_DEVICES"] = "2,3"
+                        device_env["ASCEND_RT_VISIBLE_DEVICES"] = "2,3"
+                    else:
+                        # GPU环境：避免使用GPU 0
+                        device_env["CUDA_VISIBLE_DEVICES"] = "2,3"
+                except ImportError:
+                    # 回退到CUDA
+                    device_env["CUDA_VISIBLE_DEVICES"] = "2,3"
+                
                 env_new = {
                     "CONDA_PREFIX":parent_env['CONDA_PREFIX'],
                     "HOME":parent_env['HOME'],
@@ -154,7 +217,7 @@ class LocalLauncher:
                     "CONDA_DEFAULT_ENV":parent_env['CONDA_DEFAULT_ENV'],
                     "LD_LIBRARY_PATH":parent_env['LD_LIBRARY_PATH'],
                     "PATH": parent_env['PATH'],
-                    "CUDA_VISIBLE_DEVICES": "2,3" # add gpu rank setting to avoid using rank 0 when restarting
+                    **device_env  # 添加设备环境变量
                 }
                 process = subprocess.Popen(c, env =env_new, shell=isinstance(c, str))
             else:

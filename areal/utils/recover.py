@@ -240,7 +240,17 @@ class RecoverHandler:
                 if dist.get_rank() == 0:
                     future.result()
                 dist.barrier(device_ids=[update_engine.device.index])
-                torch.cuda.synchronize()
+                
+                # 设备同步：NPU使用torch.npu.synchronize()，GPU使用torch.cuda.synchronize()
+                if 'npu' in str(update_engine.device):
+                    try:
+                        import torch_npu
+                        torch.npu.synchronize()
+                    except ImportError:
+                        pass
+                else:
+                    torch.cuda.synchronize()
+                    
                 inference_engine.resume()
                 update_engine.set_version(global_step + 1)
                 inference_engine.set_version(global_step + 1)

@@ -31,13 +31,14 @@ class RemotevLLMEngine(InferenceEngine):
         # Basic config and addresses
         self.config = config
         
-        # Setup NPU environment if NPU device is specified
-        if hasattr(config, 'device') and config.device == 'npu':
+        # Setup device environment if device is specified as 'auto' (vLLM does not support 'npu' as device)
+        if hasattr(config, 'device') and config.device == 'auto':
+            # 可根据实际需要在此处自动检测 NPU 并初始化
             if is_npu_available():
                 prepare_npu_for_vllm()
-                logger.info("NPU environment prepared for vLLM")
+                logger.info("NPU environment prepared for vLLM (auto mode)")
             else:
-                logger.warning("NPU device specified but torch_npu not available, falling back to CPU/CUDA")
+                logger.info("Device 'auto': NPU not available, using CPU/CUDA")
         
         raw_addrs = os.getenv("AREAL_LLM_SERVER_ADDRS", "").strip()
         if not raw_addrs:

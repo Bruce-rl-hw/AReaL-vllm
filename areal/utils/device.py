@@ -12,9 +12,23 @@ def _get_current_mem_info(unit: str = "GB", precision: int = 2) -> Tuple[str]:
     """Get current memory usage."""
     assert unit in ["GB", "MB", "KB"]
     divisor = 1024**3 if unit == "GB" else 1024**2 if unit == "MB" else 1024
-    mem_allocated = torch.cuda.memory_allocated()
-    mem_reserved = torch.cuda.memory_reserved()
-    mem_free, mem_total = torch.cuda.mem_get_info()
+    
+    try:
+        # 先尝试CUDA
+        mem_allocated = torch.cuda.memory_allocated()
+        mem_reserved = torch.cuda.memory_reserved()
+        mem_free, mem_total = torch.cuda.mem_get_info()
+    except:
+        # 如果CUDA失败，尝试NPU
+        try:
+            import torch_npu
+            mem_allocated = torch.npu.memory_allocated()
+            mem_reserved = torch.npu.memory_reserved()
+            mem_free, mem_total = torch.npu.mem_get_info()
+        except:
+            # 都失败则返回默认值
+            return "0.00", "0.00", "0.00", "0.00"
+    
     mem_used = mem_total - mem_free
     mem_allocated = f"{mem_allocated / divisor:.{precision}f}"
     mem_reserved = f"{mem_reserved / divisor:.{precision}f}"

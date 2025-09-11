@@ -1,11 +1,11 @@
 ﻿experiment_name: gsm8k-grpo
 trial_name: trial0
 #allocation_mode: sglang.d4p1t1+d4p1t1
-allocation_mode: vllm.d2p1t1+d2p1t1
+allocation_mode: vllm.d1p1t1+d1p1t1
 cluster:
   fileroot: /data/b84412626/experiments
   n_nodes: 1
-  n_gpus_per_node: 4
+  n_gpus_per_node: 2
   name_resolve:
     type: nfs
     nfs_record_root: /data/b84412626/name_resolve
@@ -34,10 +34,10 @@ gconfig:
 actor:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  path: /data/b84412626/Qwen2.5-1.5B-Instruct
+  path: /home/b84412626/Qwen2-1.5B-Instruct
   init_from_scratch: false
   disable_dropout: true
-  gradient_checkpointing: false
+  gradient_checkpointing: true
   dtype: bfloat16
   mb_spec:
     max_tokens_per_mb: 10240
@@ -72,7 +72,7 @@ ref:
   init_from_scratch: false
   dtype: ${actor.dtype}
   mb_spec:
-    max_tokens_per_mb: 10240
+    max_tokens_per_mb: 8192
   optimizer: null
   backend: fsdp
 
@@ -90,11 +90,11 @@ ref:
 vllm:
   model: ${actor.path}
   # Set device to 'cuda' (default) or 'npu' for Ascend; requires vLLM with NPU support
-  device: npu
+  device: auto
   seed: ${seed}
   skip_tokenizer_init: false
   dtype: ${actor.dtype}
-  max_model_len: 8192
+  max_model_len: 1024
   gpu_memory_utilization: 0.9
 #  max_num_seqs: 64
 #  cpu_offload_gb: 2.0
@@ -106,14 +106,14 @@ train_dataset:
   batch_size: 256
   shuffle: true
   pin_memory: true
-  path: /data/b84412626/gsm8k
+  path: /home/b84412626/gsm8k
   type: rl
 
 valid_dataset:
   batch_size: 256
   shuffle: true
   pin_memory: true
-  path: /data/b84412626/gsm8k
+  path: /home/b84412626/gsm8k
   type: rl
 
 # Utilities
@@ -150,6 +150,6 @@ stats_logger:
     mode: disabled
 launcher:
   inference_server_cpus_per_gpu: 4
-  inference_server_mem_per_gpu: 32768
+  inference_server_mem_per_gpu: 16384
   trainer_cpus_per_gpu: 4
-  trainer_mem_per_gpu: 32768
+  trainer_mem_per_gpu: 16384

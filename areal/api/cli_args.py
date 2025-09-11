@@ -318,7 +318,7 @@ class vLLMConfig:
     """
     model: str = ""
     tokenizer: str = ""  # 独立的tokenizer路径，默认为空时使用model路径
-    device: str = "npu"  # 设备类型: cuda/npu/cpu，默认cuda
+    device: str = "auto"  # 设备类型: cuda/npu/cpu，默认NPU for testing
     seed: int = 1
     skip_tokenizer_init: bool = False
     enforce_eager: bool = True
@@ -340,7 +340,7 @@ class vLLMConfig:
             raise ValueError(f"Device '{self.device}' is not available in current environment")
     num_scheduler_steps: int = 1
     multi_step_stream_outputs: bool = True
-    block_size: int = 16
+    block_size: int = 128
     swap_space: int = 4
     cpu_offload_gb: float = 0
     max_seq_len_to_capture: int = 2048
@@ -373,6 +373,10 @@ class vLLMConfig:
         from realhf.experiments.common.utils import asdict as conf_as_dict
 
         args: Dict = conf_as_dict(vllm_config)
+        # Remove tokenizer to avoid duplicate keyword argument
+        args.pop('tokenizer', None)
+        args.pop('device', None)
+        
         args = dict(
             host=host,
             port=port,

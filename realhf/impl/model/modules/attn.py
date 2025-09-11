@@ -33,8 +33,10 @@ except ModuleNotFoundError:
 try:
     import torch_npu
     HAS_NPU = True
+    print("✅ [NPU] torch_npu imported successfully")
 except ModuleNotFoundError:
     HAS_NPU = False
+    print("❌ [NPU] torch_npu not available")
 
 logger = logging.getLogger("Attention")
 
@@ -46,6 +48,7 @@ def flash_attn_with_kvcache(
 ):
     """Unified interface for flash attention with kv cache"""
     if HAS_NPU and str(q.device).startswith('npu'):
+        print(f"🔥 [NPU] Using NPU flash_attn_with_kvcache - device: {q.device}, q.shape: {q.shape}")
         # NPU implementation using torch_npu.npu_incre_flash_attention
         if k is not None and v is not None:
             # Update cache
@@ -88,6 +91,7 @@ def flash_attn_varlen_func_unified(
 ):
     """Unified interface for variable length flash attention"""
     if HAS_NPU and str(q.device).startswith('npu'):
+        print(f"🔥 [NPU] Using NPU flash_attn_varlen_func - device: {q.device}, q.shape: {q.shape}")
         # NPU implementation using torch_npu.npu_fusion_attention
         num_heads = q.shape[1] if len(q.shape) == 3 else q.shape[2]
         scale_value = softmax_scale if softmax_scale is not None else (1.0 / (q.shape[-1] ** 0.5))
