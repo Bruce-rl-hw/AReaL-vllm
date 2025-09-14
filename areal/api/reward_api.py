@@ -1,5 +1,5 @@
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import lru_cache, partial
 from typing import Callable, List, Optional
 
@@ -32,6 +32,13 @@ def reward_fn(
 
 @lru_cache(maxsize=1)
 def get_rw_executor(max_workers):
+    # 在NPU环境下使用ThreadPoolExecutor避免进程间通信问题
+    try:
+        from areal.utils.npu import is_npu_available
+        if is_npu_available():
+            return ThreadPoolExecutor(max_workers=max_workers)
+    except ImportError:
+        pass
     return ProcessPoolExecutor(max_workers=max_workers)
 
 
@@ -66,3 +73,9 @@ class AsyncRewardWrapper:
                 f"Computing reward timeout after {self.timeout_seconds}s. Set reward to 0."
             )
             return 0
+        except RuntimeError as e:
+            if "cannot schedule new futures after shutdown" in str(e):
+                logger.warning("Executor was shutdown, returning default reward value")
+                return 0
+            else:
+                raise

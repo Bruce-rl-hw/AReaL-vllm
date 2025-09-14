@@ -30,8 +30,9 @@ class DeepSpeedAutoTPEngine(BaseHFEngine):
         self.create_process_group()
 
         world_size = int(os.environ.get("WORLD_SIZE"))
+        dist_backend = "hccl" if "npu" in str(self.config.device).lower() else "nccl"
         deepspeed.init_distributed(
-            dist_backend="nccl",
+            dist_backend=dist_backend,
             world_size=world_size,
             timeout=constants.NCCL_DEFAULT_TIMEOUT,
         )

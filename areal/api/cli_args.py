@@ -12,6 +12,7 @@ from hydra import initialize as hydra_init
 from omegaconf import MISSING, OmegaConf
 
 from areal.utils.fs import get_user_tmp
+from areal.utils.device_manager import get_device_type, validate_device_compatibility
 
 
 @dataclass
@@ -70,6 +71,12 @@ class GenerationHyperparameters:
     temperature: float = field(
         default=1.0,
         metadata={"help": "Sampling temperature. Higher values increase diversity."},
+    )
+    repetition_penalty: float = field(
+        default=1.0,
+        metadata={
+            "help": "Repetition penalty (>1 discourages repeats, <1 encourages). 1.0 disables."
+        },
     )
     stop_token_ids: List[int] = field(
         default_factory=list,
@@ -310,6 +317,8 @@ class vLLMConfig:
     """Configuration for vLLM runtime.
     """
     model: str = ""
+    tokenizer: str = ""  # 独立的tokenizer路径，默认为空时使用model路径
+    device: str = "auto"  # 设备类型: cuda/npu/cpu，默认NPU for testing
     seed: int = 1
     skip_tokenizer_init: bool = False
     enforce_eager: bool = True
@@ -319,9 +328,19 @@ class vLLMConfig:
     # original
     max_num_seqs: int = 256
     # kv_cache_type: str = "auto"
+    
+    def __post_init__(self):
+        """Post-initialization to validate and auto-detect device."""
+        # Auto-detect device if not explicitly set or set to "auto"
+        if self.device == "auto":
+            self.device = get_device_type()
+        
+        # Validate device compatibility
+        if not validate_device_compatibility(self.device):
+            raise ValueError(f"Device '{self.device}' is not available in current environment")
     num_scheduler_steps: int = 1
     multi_step_stream_outputs: bool = True
-    block_size: int = 16
+    block_size: int = 128
     swap_space: int = 4
     cpu_offload_gb: float = 0
     max_seq_len_to_capture: int = 2048
@@ -354,6 +373,10 @@ class vLLMConfig:
         from realhf.experiments.common.utils import asdict as conf_as_dict
 
         args: Dict = conf_as_dict(vllm_config)
+        # Remove tokenizer to avoid duplicate keyword argument
+        args.pop('tokenizer', None)
+        args.pop('device', None)
+        
         args = dict(
             host=host,
             port=port,
@@ -361,7 +384,7 @@ class vLLMConfig:
             tokenizer=vllm_config.model,
             load_format="auto",
             trust_remote_code=True,
-            device="cuda",
+            device=vllm_config.device or "cuda",
             tensor_parallel_size=tp_size,
             **args,
         )

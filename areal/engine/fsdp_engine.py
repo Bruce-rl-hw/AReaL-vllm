@@ -146,9 +146,33 @@ class FSDPEngine(BaseHFEngine):
                 self._init_distributed_weight_update(meta)
             self._update_weights_from_distributed(meta.nccl_param_specs)
             dist.barrier(device_ids=[self.device.index])
-            torch.cuda.synchronize()
+            
+            # 设备同步：NPU使用torch.npu.synchronize()，GPU使用torch.cuda.synchronize()
+            if 'npu' in str(self.device):
+                try:
+                    import torch_npu
+                    torch.npu.synchronize()
+                except ImportError:
+                    pass
+            else:
+                torch.cuda.synchronize()
         elif meta.type == "disk":
+            logger.info(
+                f"[weight_update][disk] rank{dist.get_rank()} begin save to {meta.path}"
+            )
             self._save_model_to_hf(meta.path, self.tokenizer, self.processor)
+            # After HF save, list a sample of files on rank0 for diagnostics
+            if dist.get_rank() == 0:
+                try:
+                    all_files = os.listdir(meta.path)
+                    sample = sorted(all_files)[:20]
+                    logger.info(
+                        f"[weight_update][disk] rank0 saved {len(all_files)} files at {meta.path}; sample: {sample}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[weight_update][disk] rank0 failed to list files in {meta.path}: {type(e).__name__}: {e}"
+                    )
             # dist.barrier() are called when _save_model_to_hf finished
             if dist.get_rank() == 0:
                 update_name = names.update_weights_from_disk(
@@ -158,6 +182,9 @@ class FSDPEngine(BaseHFEngine):
                 )
                 name_resolve.add(
                     update_name, str(datetime.now().timestamp()), keepalive_ttl=120
+                )
+                logger.info(
+                    f"[weight_update][disk] rank0 published update signal for version {self.get_version()}"
                 )
         else:
             raise ValueError(f"Unknown weight update type {meta.type}")
@@ -198,7 +225,16 @@ class FSDPEngine(BaseHFEngine):
                     dist.broadcast(tensor, src=0, group=self.weight_update_group)
                 del tensor
             dist.barrier(device_ids=[self.device.index])
-            torch.cuda.synchronize()
+            
+            # 设备同步：NPU使用torch.npu.synchronize()，GPU使用torch.cuda.synchronize()
+            if 'npu' in str(self.device):
+                try:
+                    import torch_npu
+                    torch.npu.synchronize()
+                except ImportError:
+                    pass
+            else:
+                torch.cuda.synchronize()
 
     def _bin_pack_param_specs(
         self, param_specs: List[ParamSpec], chunked_mem_mb=1024

@@ -21,7 +21,9 @@ BASE_ENVIRONS = {
     "PYTORCH_KERNEL_CACHE_PATH": PYTORCH_KERNEL_CACHE_PATH,
     "TRITON_CACHE_DIR": TRITON_CACHE_PATH,
     "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-    "PYTHONPATH": str(pathlib.Path(__file__).resolve().parent.parent.parent),
+    "PYTHONPATH": os.environ.get("PYTHONPATH", "") + ":" + str(
+        pathlib.Path(__file__).resolve().parent.parent.parent
+    ),
 }
 NA132_ENVIRONS = {
     "NCCL_SOCKET_IFNAME": "bond0",

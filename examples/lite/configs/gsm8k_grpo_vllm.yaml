@@ -12,7 +12,7 @@ cluster:
 seed: 1
 total_train_epochs: 4
 tokenizer_path: ${actor.path}
-async_training: false
+async_training: true
 
 rollout:
   experiment_name: ${experiment_name}
@@ -34,10 +34,10 @@ gconfig:
 actor:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  path: /data/z00637938/hub/models--Qwen--Qwen3-1.7B/snapshots/70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+  path: /home/b84412626/Qwen2-1.5B-Instruct
   init_from_scratch: false
   disable_dropout: true
-  gradient_checkpointing: false
+  gradient_checkpointing: true
   dtype: bfloat16
   mb_spec:
     max_tokens_per_mb: 10240
@@ -72,7 +72,7 @@ ref:
   init_from_scratch: false
   dtype: ${actor.dtype}
   mb_spec:
-    max_tokens_per_mb: 10240
+    max_tokens_per_mb: 8192
   optimizer: null
   backend: fsdp
 
@@ -89,10 +89,12 @@ ref:
 
 vllm:
   model: ${actor.path}
+  # Set device to 'cuda' (default) or 'npu' for Ascend; requires vLLM with NPU support
+  device: auto
   seed: ${seed}
-  skip_tokenizer_init: true
+  skip_tokenizer_init: false
   dtype: ${actor.dtype}
-  max_model_len: 8192
+  max_model_len: 1024
   gpu_memory_utilization: 0.9
 #  max_num_seqs: 64
 #  cpu_offload_gb: 2.0
@@ -104,14 +106,14 @@ train_dataset:
   batch_size: 256
   shuffle: true
   pin_memory: true
-  path: /root/.cache/huggingface/hub/datasets--openai--gsm8k/snapshots/e53f048856ff4f594e959d75785d2c2d37b678ee
+  path: /home/b84412626/gsm8k
   type: rl
 
 valid_dataset:
   batch_size: 256
   shuffle: true
   pin_memory: true
-  path: /root/.cache/huggingface/hub/datasets--openai--gsm8k/snapshots/e53f048856ff4f594e959d75785d2c2d37b678ee
+  path: /home/b84412626/gsm8k
   type: rl
 
 # Utilities
@@ -148,6 +150,6 @@ stats_logger:
     mode: disabled
 launcher:
   inference_server_cpus_per_gpu: 4
-  inference_server_mem_per_gpu: 32768
+  inference_server_mem_per_gpu: 16384
   trainer_cpus_per_gpu: 4
-  trainer_mem_per_gpu: 32768
+  trainer_mem_per_gpu: 16384

@@ -44,6 +44,18 @@ logger = logging.getLogger("Base HF Engine")
 
 class BaseHFEngine(TrainEngine):
     def __init__(self, config: TrainEngineConfig):
+        # NPU环境下禁用torch编译优化
+        try:
+            from areal.utils.npu import is_npu_available
+            if is_npu_available():
+                # 禁用torch.compile的全局设置
+                torch._dynamo.config.suppress_errors = True
+                torch._dynamo.config.disable = True
+                os.environ["TORCHDYNAMO_DISABLE"] = "1"
+                logger.info("NPU detected: Disabled torch.compile for NPU compatibility")
+        except ImportError:
+            pass
+        
         self.config = config
         self.optimizer_config = config.optimizer
 
@@ -86,23 +98,51 @@ class BaseHFEngine(TrainEngine):
         return self._parallelism_group
 
     def create_process_group(self):
-        # Required by NCCL weight update group for SGLang
+        # Required by NCCL/HCCL weight update group for SGLang/NPU
         os.environ["NCCL_CUMEM_ENABLE"] = "0"
         os.environ["NCCL_NVLS_ENABLE"] = "0"
         if not dist.is_initialized():
-            # TODO: Handle the condition when WORLD_SIZE and RANK is not set in launcher
-            # NOTE: device_id **SHOULD NOT** be passed into init_process_group,
-            # otherwise initializing the NCCL weight update group will be wrong!
+            # 自动选择分布式后端：检查NPU可用性而不是config.device
+            backend = "nccl"  # 默认使用nccl
+            try:
+                from areal.utils.npu import is_npu_available
+                if is_npu_available():
+                    backend = "hccl"
+            except ImportError:
+                pass
+            
             dist.init_process_group(
-                backend="nccl",
+                backend=backend,
                 timeout=constants.NCCL_DEFAULT_TIMEOUT,
             )
             self.own_global_group = True
         self._parallelism_group = dist.new_group()
 
     def create_device_model(self):
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-        self.device = torch.device(int(os.environ["LOCAL_RANK"]))
+        local_rank = int(os.environ["LOCAL_RANK"])
+        
+        # 自动检测设备类型：优先检查NPU可用性
+        use_npu = False
+        try:
+            from areal.utils.npu import is_npu_available
+            use_npu = is_npu_available()
+        except ImportError:
+            pass
+        
+        if use_npu:
+            # NPU设备初始化
+            try:
+                import torch_npu
+                torch.npu.set_device(local_rank)
+                self.device = torch.device(f"npu:{local_rank}")
+            except ImportError:
+                print("Warning: torch_npu not available, falling back to CUDA")
+                torch.cuda.set_device(local_rank)
+                self.device = torch.device(local_rank)
+        else:
+            # CUDA设备初始化（原逻辑）
+            torch.cuda.set_device(local_rank)
+            self.device = torch.device(local_rank)
 
         dtype = getattr(torch, self.config.dtype)
 
@@ -120,19 +160,25 @@ class BaseHFEngine(TrainEngine):
             )
 
             tik = time.perf_counter()
-            with torch.device("cuda"):
+            device_context = torch.device("npu") if use_npu else torch.device("cuda")
+            # NPU不支持flash attention，强制使用eager模式
+            attn_impl = "eager" if use_npu else self.config.attn_impl
+            with device_context:
                 model = AutoModelForImageTextToText.from_pretrained(
                     pretrained_model_name_or_path=self.config.path,
                     trust_remote_code=True,
                     torch_dtype=dtype,
-                    attn_implementation=self.config.attn_impl,
+                    attn_implementation=attn_impl,
                 )
                 if self.config.disable_dropout:
                     disable_dropout_in_model(model)
         else:
             self.tokenizer = load_hf_tokenizer(self.config.path)
             tik = time.perf_counter()
-            with torch.device("cuda"):
+            device_context = torch.device("npu") if use_npu else torch.device("cuda")
+            # NPU不支持flash attention，强制使用eager模式
+            attn_impl = "eager" if use_npu else self.config.attn_impl
+            with device_context:
                 if self.config.init_from_scratch:
                     # initialize scratch model from config
                     # NOTE: VLM cannot directly load state dict using this
@@ -141,14 +187,14 @@ class BaseHFEngine(TrainEngine):
                     model = AutoModelForCausalLM.from_config(
                         self.model_config,
                         torch_dtype=dtype,
-                        attn_implementation=self.config.attn_impl,
+                        attn_implementation=attn_impl,
                     )
                 else:
                     model = AutoModelForCausalLM.from_pretrained(
                         pretrained_model_name_or_path=self.config.path,
                         trust_remote_code=True,
                         torch_dtype=dtype,
-                        attn_implementation=self.config.attn_impl,
+                        attn_implementation=attn_impl,
                     )
                 if self.config.disable_dropout:
                     disable_dropout_in_model(model)
@@ -212,11 +258,21 @@ class BaseHFEngine(TrainEngine):
         logger.info(f"Create optimizer time: {time.perf_counter() - tik}")
 
     def destroy(self):
-        """Destroy the engine and release GPU memory."""
+        """Destroy the engine and release GPU/NPU memory."""
         del self.optimizer
         del self.model
         gc.collect()
-        torch.cuda.empty_cache()
+        
+        # 简单判断设备类型来清理缓存
+        if 'npu' in str(self.device):
+            try:
+                import torch_npu
+                torch.npu.empty_cache()
+            except ImportError:
+                pass
+        else:
+            torch.cuda.empty_cache()
+        
         gc.collect()
         dist.destroy_process_group(self.parallelism_group)
         if self.own_global_group:
@@ -449,3 +505,5 @@ class BaseHFEngine(TrainEngine):
         unpacked = unpack_sequence(res, lens=output_seqlens, dim=0)
         reordered = reorder_list(unpacked, mb_list.backward_indices)
         return pad_and_stack_tensors_along_first_dim(reordered)
+
+

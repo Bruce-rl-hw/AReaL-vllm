@@ -178,7 +178,21 @@ def main(args):
         batch = batch.to(actor.device)
         # Create barrier to synchronize all rollout processes.
         dist.barrier(device_ids=[actor.device.index])
-        torch.cuda.synchronize()
+        
+        # 设备同步：NPU使用torch.npu.synchronize()，GPU使用torch.cuda.synchronize()
+        try:
+            # 尝试NPU同步
+            if 'npu' in str(actor.device):
+                import torch_npu
+                torch.npu.synchronize()
+            else:
+                torch.cuda.synchronize()
+        except ImportError:
+            # 如果torch_npu不可用，尝试CUDA
+            try:
+                torch.cuda.synchronize()
+            except:
+                pass
 
         if config.actor.recompute_logprob or config.actor.use_decoupled_loss:
             with stats_tracker.record_timing("recompute_logp"):
@@ -205,17 +219,35 @@ def main(args):
 
         with stats_tracker.record_timing("update_weights"):
             rollout.pause()
-            # if dist.get_rank() == 0:
             
-            # FIXME meta.path 需要更新，不能使用sglang的路径
+            # CRITICAL: Only rank 0 should call remote weight update!
+            if dist.get_rank() == 0:
+                future = rollout.update_weights(weight_update_meta)
             
-            
+            # All ranks update local weights
             actor.upload_weights(weight_update_meta)
-            rollout.update_weights(weight_update_meta)
-            # if dist.get_rank() == 0:
-            #     future.result()
+            
+            # Only rank 0 waits for remote update completion
+            if dist.get_rank() == 0:
+                future.result()
+                
             dist.barrier(device_ids=[actor.device.index])
-            torch.cuda.synchronize()
+            
+            # 设备同步：NPU使用torch.npu.synchronize()，GPU使用torch.cuda.synchronize()
+            try:
+                # 尝试NPU同步
+                if 'npu' in str(actor.device):
+                    import torch_npu
+                    torch.npu.synchronize()
+                else:
+                    torch.cuda.synchronize()
+            except ImportError:
+                # 如果torch_npu不可用，尝试CUDA
+                try:
+                    torch.cuda.synchronize()
+                except:
+                    pass
+            
             rollout.resume()
             actor.set_version(global_step + 1)
             rollout.set_version(global_step + 1)
