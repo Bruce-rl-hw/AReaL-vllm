@@ -536,6 +536,7 @@ class WorkflowExecutor:
 
         # Recomputation logic for segment-wise PPO
         # For samples with version == current_version - 1, recompute proximal_logprobs_t
+        RECOMPUTE_VERSION_KEY = "_recompute_version"
         if hasattr(self.inference_engine, "recompute_output_logprobs_sync"):
             try:
                 current_ver = self.inference_engine.get_version()
@@ -599,6 +600,8 @@ class WorkflowExecutor:
 
                         if patched_here > 0:
                             total_patched += patched_here
+                            # Mark as recomputed
+                            traj[RECOMPUTE_VERSION_KEY] = torch.tensor([current_ver], dtype=torch.int64)
                             self.logger.info(
                                 f"[Recompute] sample={idx} patched={patched_here} positions "
                                 f"at version {current_ver}"
@@ -613,6 +616,85 @@ class WorkflowExecutor:
                     )
             except Exception as e:
                 self.logger.warning(f"[Recompute] Recomputation failed: {e}")
+
+        # Staleness-based filtering - drop samples that are too old
+        if hasattr(self.inference_engine, "recompute_output_logprobs_sync"):
+            try:
+                current_ver = self.inference_engine.get_version()
+                max_head_offpolicyness = getattr(self.config, "max_head_offpolicyness", None)
+
+                if max_head_offpolicyness is not None:
+                    filtered = []
+                    dropped_count = 0
+
+                    for idx, traj in enumerate(results):
+                        if not isinstance(traj, dict):
+                            filtered.append(traj)
+                            continue
+
+                        versions = traj.get("versions", None)
+                        loss_mask = traj.get("loss_mask", None)
+
+                        if versions is None or loss_mask is None:
+                            filtered.append(traj)
+                            continue
+
+                        # Get version and loss_mask lists
+                        ver = versions[0].tolist() if torch.is_tensor(versions[0]) else list(versions[0])
+                        lm = loss_mask[0].tolist() if torch.is_tensor(loss_mask[0]) else list(loss_mask[0])
+
+                        # Find output positions (where loss_mask == 1)
+                        output_positions = [idx for idx, mask in enumerate(lm) if mask]
+                        output_versions = [ver[idx] for idx in output_positions if ver[idx] >= 0]
+
+                        if not output_versions:
+                            filtered.append(traj)
+                            continue
+
+                        max_version = max(output_versions)
+                        min_version = min(output_versions)
+
+                        # Check if sample was recomputed
+                        recompute_ver = traj.get(RECOMPUTE_VERSION_KEY, None)
+                        if recompute_ver is not None:
+                            if torch.is_tensor(recompute_ver):
+                                recomputed = int(recompute_ver[0].item()) >= 0
+                            else:
+                                recomputed = int(recompute_ver) >= 0
+                        else:
+                            recomputed = False
+
+                        # Compute staleness
+                        if recomputed:
+                            # Head staleness: how old is the oldest token (min_version)
+                            staleness = current_ver - min_version
+                        else:
+                            # Tail staleness: how old is the newest token (max_version)
+                            staleness = current_ver - max_version
+
+                        # Filter based on staleness threshold
+                        allow_staleness = 1
+                        if recomputed:
+                            allow_staleness = max(allow_staleness, int(max_head_offpolicyness))
+
+                        if staleness > allow_staleness:
+                            dropped_count += 1
+                            self.logger.info(
+                                f"[Filter] Dropping sample {idx}: staleness={staleness} > "
+                                f"threshold={allow_staleness} (recomputed={recomputed})"
+                            )
+                        else:
+                            filtered.append(traj)
+
+                    results = filtered
+
+                    if dropped_count > 0:
+                        self.logger.info(
+                            f"[Filter] Dropped {dropped_count}/{len(results) + dropped_count} "
+                            f"samples due to staleness at version {current_ver}"
+                        )
+            except Exception as e:
+                self.logger.warning(f"[Filter] Staleness filtering failed: {e}")
 
         # Concatenate into batch tensor format
         return concat_padded_tensors(results)

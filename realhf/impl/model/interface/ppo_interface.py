@@ -585,8 +585,71 @@ class PPOActorInterface(model_api.ModelInterface):
 
         if num_dropped > 0:
             logger.info(f"[Filter] Dropping {num_dropped}/{len(keep_mask)} samples due to staleness > {max_head_offpolicyness}")
+            # Apply the filter to remove dropped samples
+            input_ = self._filter_sequence_sample(input_, keep_mask)
 
         return input_
+
+    def _filter_sequence_sample(
+        self, sample: SequenceSample, keep_mask: torch.Tensor
+    ) -> SequenceSample:
+        """Filter a SequenceSample by a boolean mask, keeping only samples where mask is True."""
+        if torch.all(keep_mask):
+            # No filtering needed
+            return sample
+
+        # Convert mask to list of indices to keep
+        keep_indices = torch.where(keep_mask)[0].tolist()
+
+        # Filter ids
+        filtered_ids = [sample.ids[i] for i in keep_indices]
+
+        # Filter seqlens
+        filtered_seqlens = {}
+        for key in sample.keys:
+            filtered_seqlens[key] = [sample.seqlens[key][i] for i in keep_indices]
+
+        # Filter packed data
+        filtered_data = {}
+        if sample.data is not None:
+            for key in sample.keys:
+                if sample.data.get(key) is None:
+                    filtered_data[key] = None
+                    continue
+
+                # Unpack, filter, repack
+                unpacked_tensors = []
+                offset = 0
+                for batch_idx in range(len(sample.seqlens[key])):
+                    batch_seqlens = sample.seqlens[key][batch_idx]
+                    total_len = sum(batch_seqlens)
+                    if batch_idx in keep_indices:
+                        batch_tensor = sample.data[key][offset : offset + total_len]
+                        unpacked_tensors.append(batch_tensor)
+                    offset += total_len
+
+                # Concatenate kept tensors
+                if unpacked_tensors:
+                    filtered_data[key] = torch.cat(unpacked_tensors, dim=0)
+                else:
+                    # No samples kept for this key
+                    filtered_data[key] = sample.data[key][:0]  # Empty tensor with correct shape
+
+        # Filter metadata
+        filtered_metadata = {}
+        for key, values in sample.metadata.items():
+            filtered_metadata[key] = [values[i] for i in keep_indices]
+
+        # Create new SequenceSample
+        return SequenceSample(
+            keys=sample.keys,
+            trailing_shapes=sample.trailing_shapes,
+            dtypes=sample.dtypes,
+            ids=filtered_ids,
+            seqlens=filtered_seqlens,
+            data=filtered_data if filtered_data else None,
+            metadata=filtered_metadata,
+        )
 
     @torch.no_grad()
     def inference(
