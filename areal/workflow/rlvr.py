@@ -102,6 +102,10 @@ class RLVRWorkflow(RolloutWorkflow):
             stats_tracker.get(self.rollout_stat_scope).scalar(reward=reward)
 
             rewards.append(reward)
+            # For segment-wise PPO: collect proximal_logprobs_t (nearest policy logprobs)
+            # Pad with zeros for prompt positions, then add output logprobs
+            proximal_logprobs_t_full = [0.0] * resp.input_len + resp.proximal_logprobs_t
+
             res = dict(
                 # unsqueeze to add an additional batch dimension
                 input_ids=torch.tensor(seq).unsqueeze(0),
@@ -109,6 +113,7 @@ class RLVRWorkflow(RolloutWorkflow):
                 logprobs=torch.tensor(logprobs).unsqueeze(0),
                 versions=torch.tensor(versions).unsqueeze(0),
                 attention_mask=torch.ones(len(seq), dtype=torch.bool).unsqueeze(0),
+                proximal_logprobs_t=torch.tensor(proximal_logprobs_t_full).unsqueeze(0),  # NEW
                 # reward
                 rewards=torch.tensor([float(reward)]),
             )

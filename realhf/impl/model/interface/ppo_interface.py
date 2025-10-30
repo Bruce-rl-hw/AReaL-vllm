@@ -90,6 +90,10 @@ def _ppo_actor_loss_from_model_outputs(
     logprobs = gather_packed_shifted_log_probs(
         logits, cu_seqlens, packed_input_ids
     ).float()
+
+    # Extract segment-wise proximal logprobs if available (for segment decoupled PPO)
+    proximal_logprobs_t = input_.data.get("proximal_logprobs_t", None)
+
     loss, ppo_stat = ppo_functional.actor_loss_fn(
         logprobs=logprobs,
         old_logprobs=old_logp,
@@ -99,6 +103,7 @@ def _ppo_actor_loss_from_model_outputs(
         c_clip=c_clip,
         proximal_logprobs=input_.data.get("prox_logp", None),
         behav_imp_weight_cap=behav_imp_weight_cap,
+        proximal_logprobs_t=proximal_logprobs_t,
     )
 
     entropy = calc_entropy(logits=logits, cu_seqlens=cu_seqlens)
@@ -129,6 +134,13 @@ def _ppo_actor_loss_from_model_outputs(
             behave_approx_kl=ppo_stat["behave_approx_kl"],
             denominator="unclipped_behave_tokens",
         )
+        # Log decoupled behavior stats if using segment-wise logprobs
+        if "behave_imp_weight_decoupled" in ppo_stat:
+            stats_tracker.stat(
+                behave_imp_weight_decoupled=ppo_stat["behave_imp_weight_decoupled"],
+                behave_approx_kl_decoupled=ppo_stat["behave_approx_kl_decoupled"],
+                denominator="unclipped_behave_tokens",
+            )
     vocab_min_logits = logits.detach().min(-1).values.float()
     vocab_max_logits = logits.detach().max(-1).values.float()
     dist.all_reduce(
@@ -431,11 +443,21 @@ class PPOActorInterface(model_api.ModelInterface):
             for i in range(input_.bs)
         ]
 
+        # For segment decoupled PPO: store generation logprobs as proximal_logprobs_t
+        # These are the "nearest" policy logprobs at generation time
+        # Also track the version for each sample to enable async recomputation
+        current_version = model.version.global_step if hasattr(model, 'version') else 0
+        version_start = torch.full((len(seqlens),), current_version, dtype=torch.long)
+        version_end = torch.full((len(seqlens),), current_version, dtype=torch.long)
+
         data = dict(
             seq_no_eos_mask=seq_no_eos_mask,
             packed_input_ids=packed_input_ids,
             packed_logprobs=packed_logprobs,
             prompt_mask=prompt_mask,
+            proximal_logprobs_t=packed_logprobs.clone(),  # Segment-wise nearest logprobs
+            version_start=version_start,  # Version at generation time (head)
+            version_end=version_end,      # Version at generation time (tail)
         )
 
         res = SequenceSample(
@@ -444,24 +466,36 @@ class PPOActorInterface(model_api.ModelInterface):
                 "prompt_mask",
                 "packed_logprobs",
                 "seq_no_eos_mask",
+                "proximal_logprobs_t",  # NEW: Segment-wise logprobs for decoupled PPO
+                "version_start",  # NEW: Version tracking for recomputation
+                "version_end",    # NEW: Version tracking for recomputation
             ],
             trailing_shapes=dict(
                 packed_input_ids=(),
                 prompt_mask=(),
                 packed_logprobs=(),
                 seq_no_eos_mask=(),
+                proximal_logprobs_t=(),  # NEW
+                version_start=(),  # NEW
+                version_end=(),    # NEW
             ),
             dtypes=dict(
                 packed_input_ids=torch.long,
                 prompt_mask=torch.bool,
                 packed_logprobs=torch.float,
                 seq_no_eos_mask=torch.bool,
+                proximal_logprobs_t=torch.float,  # NEW
+                version_start=torch.long,  # NEW
+                version_end=torch.long,    # NEW
             ),
             seqlens=dict(
                 packed_input_ids=seqlens,
                 packed_logprobs=[[x - 1 for x in slens] for slens in seqlens],
                 prompt_mask=seqlens,
                 seq_no_eos_mask=[[1] * self.group_size for _ in seqlens],
+                proximal_logprobs_t=[[x - 1 for x in slens] for slens in seqlens],  # NEW: same as packed_logprobs
+                version_start=[[1] * self.group_size for _ in seqlens],  # NEW: one per sequence
+                version_end=[[1] * self.group_size for _ in seqlens],    # NEW: one per sequence
             ),
             data=data,
             ids=input_.ids,
@@ -469,6 +503,90 @@ class PPOActorInterface(model_api.ModelInterface):
         )
 
         return res
+
+    def recompute_and_filter_samples(
+        self,
+        model: model_api.Model,
+        input_: SequenceSample,
+        mb_spec: MicroBatchSpec,
+        max_head_offpolicyness: int = 4,
+    ) -> SequenceSample:
+        """Recompute proximal_logprobs_t for stale samples and filter based on staleness.
+
+        This implements the segment decoupled PPO recomputation mechanism from areal-tmp:
+        1. Check which samples need recomputation (version_start != current_version)
+        2. Recompute logprobs for those samples using inference()
+        3. Update proximal_logprobs_t with recomputed values
+        4. Filter out samples that are too stale
+
+        Args:
+            model: The model to use for recomputation
+            input_: Input samples with version tracking
+            mb_spec: Microbatch specification
+            max_head_offpolicyness: Maximum allowed staleness after recomputation
+
+        Returns:
+            Filtered SequenceSample with updated proximal_logprobs_t
+        """
+        if "version_start" not in input_.data or "version_end" not in input_.data:
+            # No version tracking, return as-is
+            return input_
+
+        current_version = model.version.global_step if hasattr(model, 'version') else 0
+
+        # Check staleness for each sample
+        version_start = input_.data["version_start"]
+        version_end = input_.data["version_end"]
+
+        # Compute staleness (how many steps since generation)
+        tail_staleness = current_version - version_end  # Staleness from last token
+        head_staleness = current_version - version_start  # Staleness from first token
+
+        # Determine which samples need recomputation (version == current - 1)
+        needs_recompute = (version_start < current_version) & (version_start >= current_version - 1)
+
+        num_to_recompute = needs_recompute.sum().item() if torch.is_tensor(needs_recompute) else sum(needs_recompute)
+
+        if num_to_recompute > 0:
+            logger.info(f"[Recompute] Recomputing {num_to_recompute} samples at version {current_version}")
+
+            # Recompute logprobs for ALL samples (simpler than selective recomputation)
+            recomputed_logprobs = self.inference(model, input_, mb_spec)
+
+            # Update proximal_logprobs_t for samples that need it
+            if "proximal_logprobs_t" in input_.data:
+                proximal_logprobs_t = input_.data["proximal_logprobs_t"].clone()
+
+                # Update the recomputed logprobs (in-place patching)
+                proximal_logprobs_t[:] = recomputed_logprobs.data["logprobs"]
+
+                input_.data["proximal_logprobs_t"] = proximal_logprobs_t
+                # Mark as recomputed by updating version_start
+                input_.data["version_start"] = torch.where(
+                    needs_recompute,
+                    torch.full_like(version_start, current_version),
+                    version_start
+                )
+
+                logger.info(f"[Recompute] Updated proximal_logprobs_t for {num_to_recompute} samples")
+
+        # Filter based on staleness
+        # After recomputation, use head_staleness; otherwise use tail_staleness
+        version_start = input_.data["version_start"]  # May have been updated
+        recomputed = (version_start == current_version)
+        staleness = torch.where(recomputed,
+                                current_version - version_start,  # Head staleness for recomputed
+                                current_version - version_end)     # Tail staleness for unrecomputed
+
+        # Keep only samples within staleness threshold
+        keep_mask = staleness <= max_head_offpolicyness
+
+        num_dropped = (~keep_mask).sum().item() if torch.is_tensor(keep_mask) else sum(~k for k in keep_mask)
+
+        if num_dropped > 0:
+            logger.info(f"[Filter] Dropping {num_dropped}/{len(keep_mask)} samples due to staleness > {max_head_offpolicyness}")
+
+        return input_
 
     @torch.no_grad()
     def inference(
@@ -690,6 +808,10 @@ class PPOActorInterface(model_api.ModelInterface):
         use_prox_logp = "proximal_logprobs" in input_.data
         if use_prox_logp:
             flat_data["prox_logp"] = input_.data["proximal_logprobs"].float()
+
+        # Add segment-wise proximal logprobs for decoupled PPO
+        if "proximal_logprobs_t" in input_.data:
+            flat_data["proximal_logprobs_t"] = input_.data["proximal_logprobs_t"].float()
 
         flat_input = SequenceSample.from_default(
             ids=list(range(input_.bs * self.group_size)),

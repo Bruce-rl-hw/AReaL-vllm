@@ -399,6 +399,7 @@ class RemoteInfEngine:
         accumulated_output_tokens = []
         accumulated_output_logprobs = []
         accumulated_versions = []
+        accumulated_proximal_logprobs_t = []  # Segment-wise nearest logprobs
 
         # A single "rid" shares the same server to allow KV cache reuse
         if req.rid in self.rid_to_address:
@@ -457,6 +458,7 @@ class RemoteInfEngine:
                 # Update accumulated outputs
                 accumulated_output_tokens.extend(gen_result.output_tokens)
                 accumulated_output_logprobs.extend(gen_result.output_logprobs)
+                accumulated_proximal_logprobs_t.extend(gen_result.proximal_logprobs_t)
                 accumulated_versions.extend(
                     [self.get_version()] * len(gen_result.output_tokens)
                 )
@@ -487,6 +489,7 @@ class RemoteInfEngine:
             output_tokens=accumulated_output_tokens,
             output_logprobs=accumulated_output_logprobs,
             output_versions=accumulated_versions,
+            proximal_logprobs_t=accumulated_proximal_logprobs_t,
             stop_reason=stop_reason,
             latency=latency,
             ttft=latency,  # Simplified for non-streaming
@@ -494,6 +497,66 @@ class RemoteInfEngine:
             processor=req.processor,
         )
         return response
+
+    def recompute_output_logprobs_sync(
+        self,
+        input_ids: list[int],
+        start_index: int,
+        image_data: list[Any] | None = None,
+    ) -> list[float]:
+        """Synchronously recompute latest-policy logprobs for the output span.
+
+        Used by workflow_api.py to patch proximal_logprobs_t for stale samples.
+
+        Parameters
+        ----------
+        input_ids : List[int]
+            Full sequence (prompt + outputs)
+        start_index : int
+            Index to start computing logprobs from (usually first_output_idx - 1)
+        image_data : Optional[List[Any]]
+            Optional VLM images
+
+        Returns
+        -------
+        List[float]
+            A list of length len(input_ids) - start_index - 1 containing
+            prefill-computed logprobs for each token after start_index
+            under the latest engine version.
+        """
+        server_addr = self.choose_server()
+
+        # Build request for prefill-only (max_new_tokens=0)
+        payload = {
+            "input_ids": input_ids,
+            "image_data": image_data or [],
+            "sampling_params": {
+                "top_p": 1.0,
+                "top_k": -1,
+                "max_new_tokens": 0,
+                "temperature": 0,
+            },
+            "return_logprob": True,
+            "stream": False,
+            # Start at start_index so returned [1:] aligns to tokens after start_index
+            "logprob_start_len": max(0, int(start_index)),
+        }
+
+        try:
+            res = requests.post(
+                f"http://{server_addr}/generate",
+                json=payload,
+                timeout=self.config.request_timeout
+            )
+            res.raise_for_status()
+            result = res.json()
+            meta = result["meta_info"]
+            input_logprobs = [x[0] for x in meta["input_token_logprobs"]]
+            # Skip the position at start_index itself; return following tokens
+            return input_logprobs[1:]
+        except Exception as e:
+            self.logger.error(f"Recompute failed: {e}")
+            return []
 
     def init_weights_update_group(self, meta: WeightUpdateMeta) -> Future[None]:
         """Initialize the weight update process group for distributed weight updates.

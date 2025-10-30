@@ -534,6 +534,86 @@ class WorkflowExecutor:
         # Shuffle for randomness (helps with data diversity)
         random.shuffle(results)
 
+        # Recomputation logic for segment-wise PPO
+        # For samples with version == current_version - 1, recompute proximal_logprobs_t
+        if hasattr(self.inference_engine, "recompute_output_logprobs_sync"):
+            try:
+                current_ver = self.inference_engine.get_version()
+                total_patched = 0
+
+                for idx, traj in enumerate(results):
+                    if not isinstance(traj, dict):
+                        continue
+
+                    input_ids = traj.get("input_ids", None)
+                    versions = traj.get("versions", None)
+                    loss_mask = traj.get("loss_mask", None)
+                    prox = traj.get("proximal_logprobs_t", None)
+
+                    if (
+                        input_ids is None
+                        or versions is None
+                        or loss_mask is None
+                        or prox is None
+                    ):
+                        continue
+
+                    # Work with first batch element
+                    ids = input_ids[0].tolist() if torch.is_tensor(input_ids[0]) else list(input_ids[0])
+                    ver = versions[0].tolist() if torch.is_tensor(versions[0]) else list(versions[0])
+                    lm = loss_mask[0].tolist() if torch.is_tensor(loss_mask[0]) else list(loss_mask[0])
+
+                    # Find output positions
+                    output_positions = [idx for idx, mask in enumerate(lm) if mask]
+                    if not output_positions:
+                        continue
+
+                    first_output_idx = output_positions[0]
+                    start_index = max(0, first_output_idx - 1)
+
+                    # Find positions that need recomputation (version == current_ver - 1)
+                    need_positions = [
+                        (pos_idx, seq_idx)
+                        for pos_idx, seq_idx in enumerate(output_positions)
+                        if ver[seq_idx] == current_ver - 1
+                    ]
+
+                    if not need_positions:
+                        continue
+
+                    # Recompute logprobs
+                    try:
+                        latest_out_logp = self.inference_engine.recompute_output_logprobs_sync(
+                            input_ids=ids,
+                            start_index=start_index,
+                        )
+
+                        # Patch proximal_logprobs_t at stale positions
+                        patched_here = 0
+                        for pos_idx, seq_idx in need_positions:
+                            rel_offset = seq_idx - start_index - 1
+                            if 0 <= rel_offset < len(latest_out_logp):
+                                new_val = float(latest_out_logp[rel_offset])
+                                prox[0, seq_idx] = new_val
+                                patched_here += 1
+
+                        if patched_here > 0:
+                            total_patched += patched_here
+                            self.logger.info(
+                                f"[Recompute] sample={idx} patched={patched_here} positions "
+                                f"at version {current_ver}"
+                            )
+                    except Exception as e:
+                        self.logger.warning(f"[Recompute] Failed for sample {idx}: {e}")
+
+                if total_patched > 0:
+                    self.logger.info(
+                        f"[Recompute] Total: patched {total_patched} positions across "
+                        f"{len(results)} samples at version {current_ver}"
+                    )
+            except Exception as e:
+                self.logger.warning(f"[Recompute] Recomputation failed: {e}")
+
         # Concatenate into batch tensor format
         return concat_padded_tensors(results)
 

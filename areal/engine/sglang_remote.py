@@ -47,6 +47,7 @@ class SGLangBackend:
             "sampling_params": sample_params,
             "return_logprob": True,
             "stream": False,
+            "logprob_start_len": -1,  # Request input logprobs for segment-wise PPO
         }
 
         # Add LoRA if initialized
@@ -67,15 +68,22 @@ class SGLangBackend:
             return HttpGenerationResult(
                 output_tokens=[],
                 output_logprobs=[],
+                proximal_logprobs_t=[],
                 stop_reason=stop_reason,
             )
 
         output_tokens = [x[1] for x in meta_info["output_token_logprobs"]]
         output_logprobs = [x[0] for x in meta_info["output_token_logprobs"]]
 
+        # For segment-wise PPO: extract input logprobs (proximal_logprobs_t)
+        # Skip first element [1:] as it corresponds to the position before first output token
+        input_logprobs = meta_info.get("input_token_logprobs", [])
+        proximal_logprobs_t = [x[0] for x in input_logprobs[1:]] if input_logprobs else []
+
         return HttpGenerationResult(
             output_tokens=output_tokens,
             output_logprobs=output_logprobs,
+            proximal_logprobs_t=proximal_logprobs_t,
             stop_reason=stop_reason,
         )
 

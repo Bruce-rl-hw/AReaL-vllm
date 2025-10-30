@@ -151,6 +151,9 @@ class PPOMATHConfig(CommonExperimentConfig, PPOMATHExperimentOptions):
             "packed_input_ids",
             "packed_logprobs",
             "prompt_mask",
+            "proximal_logprobs_t",  # NEW: Segment-wise logprobs for decoupled PPO
+            "version_start",  # NEW: Version tracking
+            "version_end",    # NEW: Version tracking
         ]
         if self.ppo.recompute_logprob and not self.ppo.use_decoupled_loss:
             rollout_output_keys.remove("packed_logprobs")
@@ -232,6 +235,8 @@ class PPOMATHConfig(CommonExperimentConfig, PPOMATHExperimentOptions):
             "values",
             "prompt_mask",
             "seq_no_eos_mask",
+            "version_start",  # NEW: For offpolicyness tracking
+            "version_end",    # NEW: For offpolicyness tracking
         ]
         if self.ppo.disable_value:
             train_actor_inputs.remove("values")
@@ -239,6 +244,7 @@ class PPOMATHConfig(CommonExperimentConfig, PPOMATHExperimentOptions):
             train_actor_inputs.remove("packed_ref_logprobs")
         if self.ppo.use_decoupled_loss:
             train_actor_inputs.append("proximal_logprobs")
+            train_actor_inputs.append("proximal_logprobs_t")  # NEW: Segment-wise logprobs
         train_actor = MFCDef(
             name="actor_train",
             model_name="actor",

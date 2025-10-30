@@ -57,8 +57,9 @@ def actor_loss_fn(
     c_clip: Optional[float] = None,
     proximal_logprobs: Optional[torch.FloatTensor] = None,
     behav_imp_weight_cap: Optional[torch.FloatTensor] = None,
+    proximal_logprobs_t: Optional[torch.FloatTensor] = None,
 ) -> Tuple[torch.Tensor, Dict]:
-    """Compute PPO actor loss function.
+    """Compute PPO actor loss function with optional segment-wise decoupling.
 
     There is no shape requirements for the inputs, but they must have the same shape.
     Either [bs, max_seqlen] for batch padded inputs or [tot_seqlen] for padded inputs.
@@ -72,9 +73,22 @@ def actor_loss_fn(
             Check https://arxiv.org/pdf/1912.09729 for details.
         loss_mask (Optional[torch.BoolTensor], optional): Mask for loss computation.
             1 if valid else 0. Defaults to None.
+        proximal_logprobs (Optional[torch.FloatTensor]): Proximal policy logprobs
+            closest to target policy. Used for behavior importance weighting.
+        behav_imp_weight_cap (Optional[float]): Cap for behavior importance weights.
+            Must be > 1.0 if provided.
+        proximal_logprobs_t (Optional[torch.FloatTensor]): Segment-wise proximal
+            policy logprobs. When provided, enables segment decoupled PPO with
+            per-token behavior importance weighting.
 
     Returns:
         Tuple[torch.Tensor, Dict]: Scalar loss and statistics.
+
+    Notes:
+        When proximal_logprobs_t is provided (segment decoupled mode):
+        - proximal_logprobs_t is used to compute behavior KL for importance weighting
+        - proximal_logprobs is still used as the reference for PPO ratio calculation
+        - This enables more fine-grained off-policy correction
     """
     assert logprobs.dtype == torch.float32
     assert old_logprobs.dtype == torch.float32
@@ -115,17 +129,40 @@ def actor_loss_fn(
         pg_loss = torch.min(pg_loss, pg_loss3)
     else:
         dual_clip_mask = torch.zeros_like(clip_mask)
-    if proximal_logprobs is not None:
+
+    # Segment decoupled PPO: compute behavior KL and importance weighting
+    if proximal_logprobs_t is not None:
+        # Use segment-wise logprobs for behavior KL computation
+        behav_kl = proximal_logprobs_t - old_logprobs
+        # Also compute decoupled behavior KL for comparison/logging
+        behav_kl_decoupled = proximal_logprobs - old_logprobs if proximal_logprobs is not None else behav_kl
+    elif proximal_logprobs is not None:
+        # Standard behavior KL when no segment-wise logprobs available
         behav_kl = proximal_logprobs - old_logprobs
+        behav_kl_decoupled = behav_kl
+    else:
+        behav_kl = None
+        behav_kl_decoupled = None
+
+    # Apply behavior importance weighting if behavior KL is computed
+    if behav_kl is not None:
         behav_imp_weight = behav_kl.exp()
+        behav_imp_weight_decoupled = behav_kl_decoupled.exp()
+
+        # Apply optional capping to prevent excessive importance weights
         if behav_imp_weight_cap is not None:
+            assert behav_imp_weight_cap > 1.0, f"behav_imp_weight_cap must be > 1.0, got {behav_imp_weight_cap}"
             behav_mask = (behav_imp_weight <= behav_imp_weight_cap).logical_and(
                 loss_mask
             )
         else:
             behav_mask = loss_mask
+
+        # Zero out behavior KL and importance weights for masked positions
         behav_kl = torch.where(behav_mask, behav_kl, 0.0)
         behav_imp_weight = torch.where(behav_mask, behav_imp_weight, 0.0)
+
+        # Apply behavior importance weighting to policy gradient loss
         pg_loss = pg_loss * behav_imp_weight
 
     logging_loss = pg_loss.detach()
@@ -141,10 +178,16 @@ def actor_loss_fn(
         clip_mask=clip_mask,
         dual_clip_mask=dual_clip_mask,
     )
-    if proximal_logprobs is not None:
+
+    # Add behavior statistics when proximal logprobs are used
+    if behav_kl is not None:
         stat["behave_imp_weight"] = behav_imp_weight
         stat["behave_approx_kl"] = behav_kl
         stat["behave_mask"] = behav_mask
+        # Add decoupled stats for comparison when using segment-wise logprobs
+        if proximal_logprobs_t is not None and proximal_logprobs is not None:
+            stat["behave_imp_weight_decoupled"] = behav_imp_weight_decoupled
+            stat["behave_approx_kl_decoupled"] = behav_kl_decoupled
 
     return pg_loss, stat
 
