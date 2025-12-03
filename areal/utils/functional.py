@@ -274,8 +274,6 @@ def ppo_actor_loss_fn(
     behav_imp_weight_cap: float | None = None,
     importance_sampling_level: str = "token",
     cu_seqlens: torch.Tensor | None = None,
-    use_p3o_reweighting: bool = False,
-    p3o_tau: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """
     When decoupled loss is disabled:
@@ -310,17 +308,6 @@ def ppo_actor_loss_fn(
             f"Invalid importance_sampling_level: {importance_sampling_level}. "
             "Must be 'token' or 'sequence'."
         )
-
-    # P3O advantage reweighting (optional, detached)
-    # w(r) = 4 * sigmoid(tau*(r-1)) * (1 - sigmoid(tau*(r-1)))
-    # This provides off-policyness control without affecting gradients
-    if use_p3o_reweighting:
-        with torch.no_grad():
-            p = torch.sigmoid(p3o_tau * (ratio - 1.0))
-            p3o_weight = 4.0 * p * (1.0 - p)
-        advantages = advantages * p3o_weight  # Reweight advantages
-    else:
-        p3o_weight = None
 
     clipped_ratio = torch.clamp(
         ratio,
@@ -364,9 +351,6 @@ def ppo_actor_loss_fn(
         stat["behave_imp_weight"] = behav_imp_weight
         stat["behave_approx_kl"] = behav_kl
         stat["behave_mask"] = behav_mask
-    # P3O statistics
-    if use_p3o_reweighting and p3o_weight is not None:
-        stat["p3o_weight"] = torch.where(loss_mask, p3o_weight, 0.0)
     return pg_loss, stat
 
 

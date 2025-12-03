@@ -364,8 +364,6 @@ class PPOActor:
                         importance_sampling_level=self.config.importance_sampling_level,
                         current_version=current_version,
                         prox_logp_method=self.config.prox_logp_method,
-                        use_p3o_reweighting=self.config.use_p3o_reweighting,
-                        p3o_tau=self.config.p3o_tau,
                         use_sapo_loss=self.config.use_sapo_loss,
                         sapo_tau_pos=self.config.sapo_tau_pos,
                         sapo_tau_neg=self.config.sapo_tau_neg,
@@ -504,8 +502,6 @@ def grpo_loss_fn(
     importance_sampling_level: str = "token",
     current_version: int | None = None,
     prox_logp_method: str = PROX_LOGP_METHOD_RECOMPUTE,
-    use_p3o_reweighting: bool = False,
-    p3o_tau: float = 1.0,
     use_sapo_loss: bool = False,
     sapo_tau_pos: float = 1.0,
     sapo_tau_neg: float = 1.05,
@@ -618,8 +614,6 @@ def grpo_loss_fn(
             behav_imp_weight_cap=behav_imp_weight_cap,
             importance_sampling_level=importance_sampling_level,
             cu_seqlens=input_data.get("cu_seqlens"),
-            use_p3o_reweighting=use_p3o_reweighting,
-            p3o_tau=p3o_tau,
         )
 
     # Log training statistics
@@ -642,12 +636,6 @@ def grpo_loss_fn(
         denominator="n_valid_tokens",
     )
 
-    # Log P3O-specific statistics
-    if use_p3o_reweighting and "p3o_weight" in stat:
-        stats_tracker.stat(
-            p3o_weight=stat["p3o_weight"],
-            denominator="n_valid_tokens",
-        )
     # Log SAPO-specific statistics
     if use_sapo_loss and "soft_gate" in stat:
         stats_tracker.stat(
