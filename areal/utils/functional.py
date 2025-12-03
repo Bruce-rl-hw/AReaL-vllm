@@ -5,11 +5,16 @@ from typing import Any
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.distributed.nn.functional as dist_F
 from megatron.core import parallel_state as mpu
 from megatron.core import tensor_parallel
 
 from areal.platforms import is_npu_available
 from areal.utils.mcore.functional import _VocabParallelEntropy
+from areal.utils.ulysses import (
+    get_ulysses_sequence_parallel_group,
+    get_ulysses_sequence_parallel_world_size,
+)
 
 
 def _gather_logprobs(
@@ -67,6 +72,12 @@ def gather_logprobs(
 
     logprobs = torch.cat(log_probs_labels_list)
 
+    # Ulysses SP path
+    if get_ulysses_sequence_parallel_world_size() > 1:
+        sp_group = get_ulysses_sequence_parallel_group()
+        logprobs = dist_F.all_gather(logprobs, group=sp_group)
+        logprobs = torch.cat(logprobs, dim=-1)
+
     return logprobs
 
 
@@ -75,7 +86,7 @@ def gather_logprobs_entropy(
     labels: torch.Tensor,
     temperature: float = 1.0,
     chunk_size: int = 1024,
-) -> tuple[torch.Tensor, torch.Tensor]:
+):
     # Megatron path
     if mpu.is_initialized() and mpu.get_tensor_model_parallel_world_size() > 1:
         # TODO: check GPU memory usage
@@ -104,6 +115,14 @@ def gather_logprobs_entropy(
 
     logprobs = torch.cat(log_probs_labels_list)
     entropy = torch.cat(entropy_list)
+
+    # Ulysses SP path
+    if get_ulysses_sequence_parallel_world_size() > 1:
+        sp_group = get_ulysses_sequence_parallel_group()
+        logprobs = dist_F.all_gather(logprobs, group=sp_group)
+        logprobs = torch.cat(logprobs, dim=-1)
+        entropy = dist_F.all_gather(entropy, group=sp_group)
+        entropy = torch.cat(entropy, dim=-1)
 
     return logprobs, entropy
 
@@ -255,6 +274,8 @@ def ppo_actor_loss_fn(
     behav_imp_weight_cap: float | None = None,
     importance_sampling_level: str = "token",
     cu_seqlens: torch.Tensor | None = None,
+    use_p3o_reweighting: bool = False,
+    p3o_tau: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """
     When decoupled loss is disabled:
@@ -289,6 +310,17 @@ def ppo_actor_loss_fn(
             f"Invalid importance_sampling_level: {importance_sampling_level}. "
             "Must be 'token' or 'sequence'."
         )
+
+    # P3O advantage reweighting (optional, detached)
+    # w(r) = 4 * sigmoid(tau*(r-1)) * (1 - sigmoid(tau*(r-1)))
+    # This provides off-policyness control without affecting gradients
+    if use_p3o_reweighting:
+        with torch.no_grad():
+            p = torch.sigmoid(p3o_tau * (ratio - 1.0))
+            p3o_weight = 4.0 * p * (1.0 - p)
+        advantages = advantages * p3o_weight  # Reweight advantages
+    else:
+        p3o_weight = None
 
     clipped_ratio = torch.clamp(
         ratio,
@@ -332,6 +364,66 @@ def ppo_actor_loss_fn(
         stat["behave_imp_weight"] = behav_imp_weight
         stat["behave_approx_kl"] = behav_kl
         stat["behave_mask"] = behav_mask
+    # P3O statistics
+    if use_p3o_reweighting and p3o_weight is not None:
+        stat["p3o_weight"] = torch.where(loss_mask, p3o_weight, 0.0)
+    return pg_loss, stat
+
+
+def sapo_loss_fn(
+    logprobs: torch.Tensor,
+    proximal_logprobs: torch.Tensor | None,
+    old_logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    tau_pos: float,
+    tau_neg: float,
+    loss_mask: torch.Tensor,
+    behav_imp_weight_cap: float | None = None,
+    importance_sampling_level: str = "token",
+    cu_seqlens: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict]:
+    """SAPO (Soft Adaptive Policy Optimization) loss with asymmetric sigmoid gates."""
+    loss_mask_count = loss_mask.count_nonzero() or 1
+    advantages = advantages.detach()
+    log_ratio = logprobs - old_logprobs
+
+    if importance_sampling_level == "sequence":
+        ratio, advantages = _compute_sequence_level_ratio_and_advantages(
+            log_ratio, advantages, loss_mask, cu_seqlens
+        )
+    elif importance_sampling_level == "token":
+        ratio = torch.exp(log_ratio)
+    else:
+        raise ValueError(
+            f"Invalid importance_sampling_level: {importance_sampling_level}. "
+            "Must be 'token' or 'sequence'."
+        )
+
+    gate_pos = torch.sigmoid(tau_pos * (ratio - 1.0))
+    gate_neg = torch.sigmoid(tau_neg * (ratio - 1.0))
+    scale_pos = 4.0 / tau_pos
+    scale_neg = 4.0 / tau_neg
+    scaled_gate_pos = gate_pos * scale_pos
+    scaled_gate_neg = gate_neg * scale_neg
+
+    is_positive = advantages > 0
+    soft_gate = torch.where(is_positive, scaled_gate_pos, scaled_gate_neg)
+
+    pg_loss = -soft_gate * advantages
+    logging_loss = pg_loss.detach()
+    pg_loss = torch.where(loss_mask, pg_loss, 0).sum() / loss_mask_count
+
+    stat = dict(
+        loss=logging_loss,
+        importance_weight=ratio.detach(),
+        approx_kl=log_ratio.detach(),
+        soft_gate=soft_gate.detach(),
+        gate_pos=gate_pos.detach(),
+        gate_neg=gate_neg.detach(),
+        clip_mask=torch.zeros_like(loss_mask),
+        dual_clip_mask=torch.zeros_like(loss_mask),
+    )
+
     return pg_loss, stat
 
 

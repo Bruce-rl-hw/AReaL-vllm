@@ -458,9 +458,6 @@ class TrainEngineConfig:
         default=False,
         metadata={"help": "Whether to use a critic/reward model"},
     )
-    temperature: float = field(
-        default=1.0, metadata={"help": "Temperature during generation."}
-    )
     # Runtime microbatch limit
     mb_spec: MicroBatchSpec = field(default_factory=MicroBatchSpec)
     pad_to_maximum: bool = field(
@@ -566,6 +563,41 @@ class PPOActorConfig(TrainEngineConfig):
         metadata={
             "help": "Dual clipping factor for policy ratio, must be > 1.0. None disables dual clipping."
         },
+    )
+    temperature: float = field(
+        default=1.0, metadata={"help": "Temperature during generation."}
+    )
+    # P3O Advantage Reweighting (compatible with PPO/DAPO clipping)
+    use_p3o_reweighting: bool = field(
+        default=False,
+        metadata={
+            "help": "Use P3O-style sigmoid advantage reweighting (detached). "
+                   "Applies w(r) = 4 * sigmoid(tau*(r-1)) * (1-sigmoid(tau*(r-1))) to advantages "
+                   "before computing PPO/DAPO loss. This provides off-policyness control without changing "
+                   "the gradient flow (w is detached). Compatible with eps_clip, eps_clip_higher, c_clip."
+        },
+    )
+    p3o_tau: float = field(
+        default=1.0,
+        metadata={
+            "help": "P3O sigmoid temperature parameter τ controlling reweighting sharpness. "
+                   "Higher values = sharper reweighting around r=1. Typical range: 0.5-2.0. "
+                   "Only used when use_p3o_reweighting=True."
+        },
+    )
+
+    # SAPO (Soft Adaptive Policy Optimization) - https://arxiv.org/abs/2511.20347
+    use_sapo_loss: bool = field(
+        default=False,
+        metadata={"help": "Use SAPO loss (mutually exclusive with PPO clipping)"},
+    )
+    sapo_tau_pos: float = field(
+        default=1.0,
+        metadata={"help": "SAPO temperature for positive advantages"},
+    )
+    sapo_tau_neg: float = field(
+        default=1.05,
+        metadata={"help": "SAPO temperature for negative advantages"},
     )
     # M2PO
     m2_threshold: float | None = field(
