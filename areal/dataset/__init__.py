@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from transformers.processing_utils import ProcessorMixin
     from transformers.tokenization_utils_fast import PreTrainedTokenizerFast
 
-VALID_DATASETS = ["gsm8k", "clevr_count_70k", "geometry3k", "hh-rlhf", "torl_data"]
+VALID_DATASETS = ["gsm8k", "clevr_count_70k", "geometry3k", "hh-rlhf", "torl_data", "hkust-nlp/SimpleRL-Zoo-Data", "open-r1/DAPO-Math-17k-Processed"]
 
 logger = logging.getLogger("Dataset")
 
@@ -24,6 +24,11 @@ def _get_custom_dataset(
     processor: Optional["ProcessorMixin"] = None,
     **kwargs,
 ) -> "Dataset":
+
+    # Normalize path for checking - handle both HF paths and local cache paths
+    path_lower = path.lower()
+    is_simplerl = any(x in path_lower for x in ["simplerl", "hkust-nlp", "dapo-math", "open-r1"])
+
     if "gsm8k" in path and type == "sft":
         from .gsm8k import get_gsm8k_sft_dataset
 
@@ -34,7 +39,7 @@ def _get_custom_dataset(
             max_length=max_length,
             **kwargs,
         )
-    elif "gsm8k" in path and type == "rl":
+    elif ("gsm8k" in path or is_simplerl) and type == "rl":
         from .gsm8k import get_gsm8k_rl_dataset
 
         return get_gsm8k_rl_dataset(
